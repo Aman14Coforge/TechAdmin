@@ -1,0 +1,4 @@
+app:
+  name: TechAdmin
+  environment: dev
+  log_level: INFO

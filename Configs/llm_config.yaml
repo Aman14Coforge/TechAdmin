@@ -1,0 +1,6 @@
+llm:
+  provider: ollama
+  model_name: qwen3:14b
+  temperature: 0
+  top_p: 0.9
+  timeout: 60

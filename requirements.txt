@@ -1,0 +1,33 @@
+# API Framework
+fastapi
+uvicorn
+
+# LangGraph & LangChain
+langgraph
+langchain
+langchain-core
+langchain-community
+langchain-ollama
+
+# Data Models
+pydantic
+
+# Configuration
+python-dotenv
+pyyaml
+
+# HTTP Calls
+requests
+httpx
+
+# Logging & Utilities
+loguru
+
+# Testing
+pytest
+
+# Future RAG
+chromadb
+
+# Documentation
+python-multipart

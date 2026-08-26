@@ -1,0 +1,14 @@
+password_reset:
+  agent: identity_agent
+
+account_unlock:
+  agent: identity_agent
+
+grant_access:
+  agent: identity_agent
+
+# network_check:
+#   agent: network_agent
+
+# software_install:
+#   agent: patch_agent
