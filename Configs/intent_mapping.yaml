@@ -1,0 +1,18 @@
+password_reset:
+  agent: identity_agent
+  tool: reset_password_tool
+account_unlock:
+  agent: identity_agent
+  tool: unlock_account_tool
+grant_access:
+  agent: identity_agent
+  tool: grant_revoke_access_tool
+revoke_access:
+  agent: identity_agent
+  tool: grant_revoke_access_tool
+failed_login_investigation:
+  agent: identity_agent
+  tool: investigate_failed_login_tool
+unknown:
+  agent: none
+  tool: none
