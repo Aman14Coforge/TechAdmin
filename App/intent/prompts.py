@@ -1,58 +1,57 @@
 """
-LLM Prompts Module
-Author: Amit Bhagat
-Purpose: Store and manage prompts for intent classification and metadata extraction
+Purpose:
+    Builds the system prompt used for the single combined LLM call that
+    classifies intent and extracts username/email/employee_id together.
+
+Scope:
+    Prompt text construction only. The prompt's allowed-intent list is
+    built dynamically from Configs/intent_mapping.yaml (via
+    App/core/config_loader.get_allowed_intents()) rather than hardcoded
+    here, so it can never drift out of sync with that existing file.
+
+Does not handle:
+    Calling the LLM, parsing its response, or validation — see
+    App/intent/metadata_extractor.py, App/intent/classifier.py, and
+    App/intent/validator.py respectively.
 """
+from __future__ import annotations
 
-# Intent Classification Prompt
-INTENT_CLASSIFICATION_PROMPT = """You are an IT support assistant. Analyze the user request and identify the intent.
+from App.core.config_loader import get_allowed_intents
 
-IMPORTANT: Be careful about keywords:
-- "get details", "show info", "user information", "account info" = get_user_details
-- "reset password", "change password", "new password" = password_reset  
-- "unlock account", "unlock user" = account_unlock
-- "grant access", "give access", "provide access" = grant_access
-- "revoke access", "remove access" = revoke_access
 
-User Request: {user_input}
+def build_extraction_prompt() -> str:
+    """Returns the system prompt text for the combined classification +
+    extraction call. Rebuilt on every call (cheap — just string
+    formatting) so it always reflects the current intent list."""
+    intents = get_allowed_intents()
+    intents_list = ", ".join(intents)
 
-Classify the intent as ONE of: get_user_details, password_reset, account_unlock, grant_access, revoke_access
+    return f"""You are the TechAdmin intent classification and metadata extraction module.
 
-Respond in VALID JSON format ONLY:
-{{
-    "intent": "<identified_intent>",
-    "confidence": <confidence_score_0_to_1>,
-    "explanation": "<brief_explanation>"
-}}
+TASK
+Given a single user IT request, do exactly two things:
+1. Classify the request into exactly one of these intents: {intents_list}.
+2. Extract the following fields ONLY if explicitly stated in the request:
+   - "username"
+   - "email"
+   - "employee_id"
 
-Only respond with valid JSON, no additional text."""
+RULES — critical, never violate these
+- Choose exactly one intent from the list above. If none clearly apply, use "unknown".
+- Never invent, guess, or infer a username, email, or employee ID that is not explicitly present in the text.
+- If a field is not present, its value MUST be JSON null (not an empty string).
+- Do not perform any action, lookup, or identity resolution — only classify and extract.
+- Respond with ONLY a JSON object of this exact shape, no extra keys, no explanation, no markdown formatting:
+  {{"intent": <string>, "username": <string or null>, "email": <string or null>, "employee_id": <string or null>}}
 
-# Metadata Extraction Prompt
-METADATA_EXTRACTION_PROMPT = """You are an IT support assistant. Extract structured information from the user request.
+EXAMPLES
 
-User Request: {user_input}
-Identified Intent: {intent}
+Input: "Reset password for aman.gupta. My email is aman.gupta@company.com and employee id is EMP12345."
+Output: {{"intent": "password_reset", "username": "aman.gupta", "email": "aman.gupta@company.com", "employee_id": "EMP12345"}}
 
-Extract the following information if available in the request:
-- username: User's username (AD format: firstname.lastname or email prefix)
-- user_id: User's unique ID or Employee ID
-- email: User's email address (format: user@domain.com)
-- employee_number: Employee number if mentioned
+Input: "Reset password for aman.gupta"
+Output: {{"intent": "password_reset", "username": "aman.gupta", "email": null, "employee_id": null}}
 
-IMPORTANT: 
-- Extract email if it's in the request (format: something@domain.com)
-- Extract username/first.last if it's in the request
-- If email is present, extract the username part before @
-- Set to null if not found in the request text
-
-Respond in VALID JSON format ONLY:
-{{
-    "username": "<username_or_null>",
-    "user_id": "<user_id_or_null>",
-    "email": "<email_or_null>",
-    "employee_number": "<employee_number_or_null>"
-}}
-
-Only respond with valid JSON, no additional text."""
-
-# TODO: Add more prompts as needed for other intents and operations
+Input: "What's the weather today?"
+Output: {{"intent": "unknown", "username": null, "email": null, "employee_id": null}}
+"""

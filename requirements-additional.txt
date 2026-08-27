@@ -1,0 +1,10 @@
+# Additional dependency required ONLY for the Gemini fallback path
+# (App/core/llm_client.py's GeminiLLMClient).
+#
+# The existing requirements.txt already covers the primary Ollama path
+# (langchain-ollama is already listed there) and is left completely
+# unmodified per project instructions. Install this separately:
+#
+#   pip install -r requirements-additional.txt
+#
+langchain-google-genai>=2.0
