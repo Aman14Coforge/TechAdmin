@@ -4,7 +4,7 @@ Author: Roshan
 Purpose: Define Pydantic models for API validation
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any
 from enum import Enum
 
@@ -33,8 +33,9 @@ class UserRequestSchema(BaseModel):
         description="Unique request ID for tracking (auto-generated if not provided)"
     )
     
-    @validator('user_input')
-    def validate_user_input(cls, v):
+    @field_validator('user_input')
+    @classmethod
+    def validate_user_input(cls, v: str) -> str:
         """Validate user input is not empty."""
         if not v or len(v.strip()) == 0:
             raise ValueError('User input cannot be empty')

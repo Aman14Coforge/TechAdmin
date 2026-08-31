@@ -9,12 +9,7 @@ from loguru import logger
 import uuid
 from typing import Optional
 
-# TODO: Import actual modules
-# from App.intent.classifier import IntentClassifier
-# from App.intent.metadata_extractor import MetadataExtractor
-# from App.workflow.router import AgentRouter
-# from App.workflow.graph import TechAdminWorkflow
-
+from App.workflow.graph import TechAdminWorkflow
 from .schemas import (
     UserRequestSchema,
     APIResponseSchema,
@@ -22,6 +17,9 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["techadmin"])
+
+# Initialize workflow engine
+workflow = TechAdminWorkflow()
 
 
 @router.post(
@@ -59,23 +57,22 @@ async def submit_request(request: UserRequestSchema) -> APIResponseSchema:
         # Generate request ID if not provided
         request_id = request.request_id or f"req_{uuid.uuid4().hex[:8]}"
         
-        # TODO: Implement workflow execution
-        # 1. Instantiate IntentClassifier
-        # 2. Classify intent
-        # 3. Instantiate MetadataExtractor
-        # 4. Extract metadata
-        # 5. Instantiate AgentRouter
-        # 6. Route to agent
-        # 7. Execute workflow
-        # 8. Format response
-        
-        response = APIResponseSchema(
-            success=False,
-            request_id=request_id,
-            message="Request processing not yet implemented",
-            error="Workflow not implemented"
+        # Execute workflow engine
+        result = workflow.execute(
+            user_input=request.user_input,
+            request_id=request_id
         )
         
+        # Package into APIResponseSchema envelope
+        response = APIResponseSchema(
+            success=result.get("success", False),
+            request_id=request_id,
+            intent=result.get("intent"),
+            message=result.get("response", "Request processed."),
+            metadata=result.get("metadata"),
+            result=result.get("execution_details"),
+            error=result.get("error")
+        )
         logger.info(f"Response for {request_id}: {response}")
         return response
         
