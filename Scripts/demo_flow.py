@@ -1,273 +1,491 @@
 """
-Complete Flow Demo - End-to-End Test
-Author: Aman Gupta
-Purpose: Test the entire workflow with real Graph API calls
-Usage: python Scripts/demo_flow.py
+Complete TechAdmin Flow Demo
+
+Purpose:
+    Demonstrate unified extraction, routing, Identity Agent validation,
+    clarification handling and correct tool execution.
 """
 
-import sys
-import os
+from __future__ import annotations
+
 import json
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
+
 from dotenv import load_dotenv
 from loguru import logger
 
-# Add project root to path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
 
-# Load environment variables
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-from App.intent.unified_extractor import UnifiedIntentMetadataExtractor
-from App.workflow.router import AgentRouter
+sys.path.insert(
+    0,
+    str(PROJECT_ROOT),
+)
+
+load_dotenv(
+    PROJECT_ROOT / ".env",
+)
+
 from App.agents.identity_agent import IdentityAgent
-from App.workflow.formatter import ResponseFormatter
-from App.utils.config import Logger, Config
+from App.intent.unified_extractor import (
+    UnifiedIntentMetadataExtractor,
+)
+from App.utils.config import Config, Logger
+from App.workflow.router import AgentRouter
 
-# Setup logging
-Logger.setup()
+
+OUTPUT_DIRECTORY = PROJECT_ROOT / "output"
+
+LATEST_RESULT_PATH = (
+    OUTPUT_DIRECTORY / "extraction_result.json"
+)
+
+ALL_QUERIES_PATH = (
+    OUTPUT_DIRECTORY / "all_queries.json"
+)
 
 
 class DemoFlow:
-    """Complete workflow demonstration."""
-    
-    def __init__(self):
-        """Initialize components."""
-        logger.info("=" * 80)
-        logger.info("TechAdmin Demo Flow - Complete End-to-End Test")
-        logger.info("=" * 80)
-        
-        # Use unified extractor instead of 2 separate calls
-        self.extractor = UnifiedIntentMetadataExtractor()
+    def __init__(self) -> None:
+        self.extractor = (
+            UnifiedIntentMetadataExtractor()
+        )
+
         self.router = AgentRouter()
         self.identity_agent = IdentityAgent()
-        self.formatter = ResponseFormatter()
-    
-    def execute_flow(self, user_input: str, request_id: str = None) -> dict:
-        """
-        Execute the complete workflow.
-        
-        Args:
-            user_input: User's request
-            request_id: Optional request ID
-            
-        Returns:
-            Final response dict
-        """
-        if not request_id:
-            import uuid
-            request_id = f"demo_{uuid.uuid4().hex[:8]}"
-        
-        logger.info(f"\n{'='*80}")
-        logger.info(f"REQUEST ID: {request_id}")
-        logger.info(f"USER INPUT: {user_input}")
-        logger.info(f"{'='*80}\n")
-        
-        try:
-            # STEP 1 & 2 COMBINED: Intent Classification + Metadata Extraction in ONE call
-            logger.info("STEP 1 & 2: Intent Classification + Metadata Extraction (Unified Call)")
-            logger.info("-" * 40)
-            
-            extraction_result = self.extractor.extract_all(user_input)
-            
-            if not extraction_result.get("success"):
-                logger.error(f"Extraction failed: {extraction_result.get('explanation')}")
-                return {
-                    "success": False,
-                    "request_id": request_id,
-                    "error": extraction_result.get('explanation'),
-                    "message": "Failed to process request"
-                }
-            
-            intent = extraction_result.get("intent")
-            confidence = extraction_result.get("confidence", 0)
-            metadata = extraction_result.get("metadata", {})
-            
-            logger.info(f"Intent: {intent}")
-            logger.info(f"Confidence: {confidence}")
-            logger.info(f"Metadata: {json.dumps(metadata, indent=2)}")
-            
-            if confidence < 0.7:
-                logger.warning(f"Low confidence ({confidence}) for intent classification")
-                return {
-                    "success": False,
-                    "request_id": request_id,
-                    "error": f"Could not confidently determine intent (confidence: {confidence})",
-                    "message": "Unable to process request due to low confidence in intent classification"
-                }
-            
-            # Validate metadata
-            is_valid, validation_msg = self.extractor.validate_metadata(metadata, intent)
-            if not is_valid:
-                logger.error(f"Metadata validation failed: {validation_msg}")
-                return {
-                    "success": False,
-                    "request_id": request_id,
-                    "intent": intent,
-                    "error": validation_msg,
-                    "message": f"Invalid metadata: {validation_msg}"
-                }
-            
-            # STEP 3: Router
-            logger.info("\nSTEP 3: Agent Routing")
-            logger.info("-" * 40)
-            routing_info = self.router.route(intent, metadata)
-            logger.info(f"Routing Info: {json.dumps(routing_info, indent=2)}")
-            
-            agent_type = routing_info.get("agent_type")
-            
-            # STEP 4: Agent Execution
-            logger.info(f"\nSTEP 4: {agent_type.upper()} Agent Execution")
-            logger.info("-" * 40)
-            
-            if agent_type == "identity":
-                agent_result = self.identity_agent.execute(intent, metadata)
-            else:
-                return {
-                    "success": False,
-                    "request_id": request_id,
-                    "intent": intent,
-                    "error": f"Unsupported agent type: {agent_type}",
-                    "message": f"No agent available for {agent_type}"
-                }
-            
-            logger.info(f"Agent Result: {json.dumps(agent_result, indent=2, default=str)}")
-            
-            # STEP 5: Response Formatting
-            logger.info("\nSTEP 5: Response Formatting")
-            logger.info("-" * 40)
-            
-            if intent == "get_user_details":
-                user_data = agent_result.get("result")
-                if agent_result.get("success") and user_data:
-                    formatted_response = f"""
-✅ User Details Retrieved Successfully
 
-User ID: {user_data.get('id')}
-Display Name: {user_data.get('displayName')}
-Email: {user_data.get('userPrincipalName')}
-Account Enabled: {user_data.get('accountEnabled')}
-User Type: {user_data.get('userType')}
-AD Sync Enabled: {user_data.get('onPremisesSyncEnabled')}
-Mail: {user_data.get('mail')}
-"""
-                else:
-                    formatted_response = self.formatter.format_error_response(
-                        agent_result.get("message"),
-                        agent_result.get("error")
-                    )
-            elif intent == "password_reset":
-                if agent_result.get("success"):
-                    formatted_response = self.formatter.format_password_reset_response(
-                        True,
-                        metadata.get("username"),
-                        agent_result.get("result")
-                    )
-                else:
-                    formatted_response = self.formatter.format_password_reset_response(
-                        False,
-                        metadata.get("username"),
-                        None,
-                        agent_result.get("error")
-                    )
-            else:
-                formatted_response = agent_result.get("message")
-            
-            logger.info(f"Formatted Response:\n{formatted_response}")
-            
-            # FINAL RESPONSE
-            final_response = {
-                "success": agent_result.get("success", False),
-                "request_id": request_id,
-                "intent": intent,
-                "message": formatted_response,
-                "metadata": metadata,
-                "result": agent_result.get("result"),
-                "error": agent_result.get("error")
-            }
-            
-            return final_response
-            
-        except Exception as e:
-            logger.error(f"Unexpected error in flow: {str(e)}", exc_info=True)
+    def execute_flow(
+        self,
+        user_input: str,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> dict:
+        request_id = (
+            request_id
+            or f"demo_{uuid4().hex[:12]}"
+        )
+
+        correlation_id = (
+            correlation_id
+            or f"corr_{uuid4().hex}"
+        )
+
+        logger.info(
+            "FLOW_STARTED | request_id={} | "
+            "correlation_id={} | user_input={}",
+            request_id,
+            correlation_id,
+            user_input,
+        )
+
+        extraction = self.extractor.extract_all(
+            user_input,
+        )
+
+        if not extraction.success:
             return {
                 "success": False,
                 "request_id": request_id,
-                "error": str(e),
-                "message": "An unexpected error occurred during processing"
+                "correlation_id": correlation_id,
+                "intent": extraction.intent.value,
+                "confidence": extraction.confidence,
+                "metadata":
+                    extraction.metadata.model_dump(
+                        mode="json",
+                    ),
+                "selected_agent": None,
+                "selected_tool": None,
+                "tool_result": None,
+                "clarification_required": False,
+                "clarification_question": None,
+                "message": extraction.explanation,
+                "error": extraction.error,
             }
 
+        if extraction.confidence < 0.70:
+            return {
+                "success": False,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "intent": extraction.intent.value,
+                "confidence": extraction.confidence,
+                "metadata":
+                    extraction.metadata.model_dump(
+                        mode="json",
+                    ),
+                "selected_agent": None,
+                "selected_tool": None,
+                "tool_result": None,
+                "clarification_required": False,
+                "clarification_question": None,
+                "message": (
+                    "The intent confidence is too low "
+                    "to continue safely."
+                ),
+                "error": "Low intent confidence",
+            }
 
-def print_response(response: dict):
-    """Pretty print the response."""
-    print("\n" + "=" * 80)
-    print("FINAL RESPONSE")
+        try:
+            routing = self.router.route(
+                extraction.intent,
+                extraction.metadata.model_dump(
+                    mode="json",
+                ),
+            )
+
+        except ValueError as exc:
+            return {
+                "success": False,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "intent": extraction.intent.value,
+                "confidence": extraction.confidence,
+                "metadata":
+                    extraction.metadata.model_dump(
+                        mode="json",
+                    ),
+                "selected_agent": None,
+                "selected_tool": None,
+                "tool_result": None,
+                "clarification_required": False,
+                "clarification_question": None,
+                "message": str(exc),
+                "error": type(exc).__name__,
+            }
+
+        if routing.agent_type.value != "identity":
+            return {
+                "success": False,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "intent": extraction.intent.value,
+                "confidence": extraction.confidence,
+                "metadata":
+                    extraction.metadata.model_dump(
+                        mode="json",
+                    ),
+                "selected_agent":
+                    routing.agent_name,
+                "selected_tool": None,
+                "tool_result": None,
+                "clarification_required": False,
+                "clarification_question": None,
+                "message": (
+                    "Only the Identity Agent is "
+                    "implemented in this demo."
+                ),
+                "error": "Agent unavailable",
+            }
+
+        agent_result = self.identity_agent.execute(
+            operation=extraction.intent,
+            metadata=extraction.metadata,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+
+        return {
+            "success": agent_result.success,
+            "request_id": request_id,
+            "correlation_id": correlation_id,
+            "intent": extraction.intent.value,
+            "confidence": extraction.confidence,
+            "explanation": extraction.explanation,
+            "metadata":
+                agent_result.metadata.model_dump(
+                    mode="json",
+                ),
+            "validation":
+                agent_result.validation.model_dump(
+                    mode="json",
+                ),
+            "selected_agent":
+                agent_result.selected_agent,
+            "selected_tool": (
+                agent_result.selected_tool.value
+                if agent_result.selected_tool
+                else None
+            ),
+            "tool_result": (
+                agent_result.tool_result.model_dump(
+                    mode="json",
+                )
+                if agent_result.tool_result
+                else None
+            ),
+            "clarification_required":
+                agent_result.clarification_required,
+            "clarification_question":
+                agent_result.clarification_question,
+            "message": agent_result.message,
+            "error": agent_result.error,
+        }
+
+
+def _read_history() -> list:
+    if not ALL_QUERIES_PATH.exists():
+        return []
+
+    try:
+        parsed = json.loads(
+            ALL_QUERIES_PATH.read_text(
+                encoding="utf-8",
+            )
+        )
+
+        return (
+            parsed
+            if isinstance(parsed, list)
+            else []
+        )
+
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ):
+        logger.exception(
+            "Unable to read query history"
+        )
+
+        return []
+
+
+def save_result(
+    *,
+    original_input: str,
+    complete_input: str,
+    response: dict,
+) -> None:
+    OUTPUT_DIRECTORY.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    LATEST_RESULT_PATH.write_text(
+        json.dumps(
+            response,
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    history = _read_history()
+
+    history.append(
+        {
+            "recorded_at": (
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+            ),
+            "original_user_input":
+                original_input,
+            "complete_user_input":
+                complete_input,
+            "response": response,
+        }
+    )
+
+    temporary_path = (
+        ALL_QUERIES_PATH.with_suffix(
+            ".tmp"
+        )
+    )
+
+    temporary_path.write_text(
+        json.dumps(
+            history,
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    temporary_path.replace(
+        ALL_QUERIES_PATH,
+    )
+
+
+def print_response(
+    response: dict,
+) -> None:
+    print()
     print("=" * 80)
-    print(json.dumps(response, indent=2, default=str))
-    print("=" * 80 + "\n")
+    print("TECHADMIN WORKFLOW RESULT")
+    print("=" * 80)
+
+    print(
+        json.dumps(
+            response,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
+    print()
+    print("EXECUTION PROOF")
+    print("-" * 80)
+
+    print(
+        f"Intent         : "
+        f"{response.get('intent')}"
+    )
+
+    print(
+        f"Selected agent : "
+        f"{response.get('selected_agent')}"
+    )
+
+    print(
+        f"Selected tool  : "
+        f"{response.get('selected_tool')}"
+    )
+
+    tool_result = response.get(
+        "tool_result"
+    )
+
+    print(
+        f"Tool status    : "
+        f"{tool_result.get('status') if tool_result else None}"
+    )
+
+    if tool_result:
+        print(
+            f"Operation ID   : "
+            f"{tool_result.get('operation_id')}"
+        )
+
+    if response.get(
+        "clarification_required"
+    ):
+        print(
+            f"Agent question : "
+            f"{response.get('clarification_question')}"
+        )
+
+    print("=" * 80)
+    print()
 
 
-def main():
-    """Run demo flow tests."""
+def main() -> None:
+    Logger.setup()
+
     demo = DemoFlow()
-    
-    # Test cases
-    test_cases = [
-        "Get details for derhant@coforge.com",
-        "Find user details for derhant",
-        "Reset password for aman.gupta",
-        "What is my account status"
-    ]
-    
-    print("\n" + "=" * 80)
-    print("TECHADMIN DEMO FLOW - INTERACTIVE TEST")
+
+    print()
     print("=" * 80)
-    print("\nEnter user request (or press Enter for predefined tests):")
-    print("Examples:")
-    for i, case in enumerate(test_cases, 1):
-        print(f"  {i}. {case}")
-    
-    user_input = input("\nYour request (or number 1-4 for examples): ").strip()
-    
-    if user_input.isdigit() and 1 <= int(user_input) <= len(test_cases):
-        user_input = test_cases[int(user_input) - 1]
-    elif not user_input:
-        user_input = test_cases[0]  # Default to first test
-    
-    # Execute flow
-    response = demo.execute_flow(user_input)
-    
-    # Print response
-    print_response(response)
-    
-    # Print summary
-    logger.info("\n" + "=" * 80)
-    logger.info("EXECUTION SUMMARY")
-    logger.info("=" * 80)
-    logger.info(f"Success: {response.get('success')}")
-    logger.info(f"Intent: {response.get('intent')}")
-    logger.info(f"Request ID: {response.get('request_id')}")
-    if response.get('error'):
-        logger.info(f"Error: {response.get('error')}")
-    logger.info("=" * 80 + "\n")
+    print("TECHADMIN IDENTITY TOOL ROUTING DEMO")
+    print("=" * 80)
+    print(
+        f"Latest result: {LATEST_RESULT_PATH}"
+    )
+    print(
+        f"All queries: {ALL_QUERIES_PATH}"
+    )
+    print(
+        f"Logs: "
+        f"{PROJECT_ROOT / 'logs' / 'techadmin.log'}"
+    )
+    print("Type 'exit' to stop.")
+    print()
+
+    pending_query: str | None = None
+    pending_request_id: str | None = None
+    pending_correlation_id: str | None = None
+
+    while True:
+        prompt = (
+            "Provide missing information: "
+            if pending_query
+            else "Enter user query: "
+        )
+
+        user_input = input(
+            prompt,
+        ).strip()
+
+        if user_input.casefold() in {
+            "exit",
+            "quit",
+        }:
+            break
+
+        if not user_input:
+            print(
+                "Please enter a request."
+            )
+            continue
+
+        if pending_query:
+            complete_input = (
+                f"{pending_query}. "
+                f"Additional information: "
+                f"{user_input}"
+            )
+        else:
+            complete_input = user_input
+
+        response = demo.execute_flow(
+            user_input=complete_input,
+            request_id=pending_request_id,
+            correlation_id=(
+                pending_correlation_id
+            ),
+        )
+
+        print_response(
+            response,
+        )
+
+        save_result(
+            original_input=user_input,
+            complete_input=complete_input,
+            response=response,
+        )
+
+        if response.get(
+            "clarification_required"
+        ):
+            pending_query = complete_input
+            pending_request_id = (
+                response["request_id"]
+            )
+            pending_correlation_id = (
+                response["correlation_id"]
+            )
+
+            print(
+                response.get(
+                    "clarification_question"
+                )
+            )
+            print()
+
+        else:
+            pending_query = None
+            pending_request_id = None
+            pending_correlation_id = None
 
 
 if __name__ == "__main__":
-    # Validate configuration
     if not Config.validate():
-        logger.error("Configuration validation failed!")
-        print("\n❌ Configuration Error!")
-        print("\nPlease ensure the following environment variables are set in .env:")
-        print("  - OLLAMA_HOST (e.g., http://localhost:11434)")
-        print("  - MODEL_NAME (e.g., qwen3:14b)")
-        print("  - GRAPH_CLIENT_ID")
-        print("  - GRAPH_CLIENT_SECRET")
-        print("  - GRAPH_TENANT_ID")
+        logger.error(
+            "Configuration validation failed"
+        )
+
         sys.exit(1)
-    
+
     try:
         main()
+
     except KeyboardInterrupt:
-        print("\n\nDemo interrupted by user.")
+        print(
+            "\nDemo interrupted."
+        )
+
         sys.exit(0)

@@ -1,67 +1,112 @@
 """
 Agent Router Module
-Author: Shreesanyog
-Purpose: Route requests to appropriate agents based on intent
+
+Purpose:
+    Route requests to the appropriate agent based on the classified
+    intent.
 """
 
-from typing import Dict, Any
+from __future__ import annotations
+
 from loguru import logger
+
+from App.workflow.state import (
+    AgentType,
+    IntentType,
+    RoutingResult,
+)
 
 
 class AgentRouter:
     """
-    Routes user requests to the appropriate agent based on identified intent.
-    Supported agents: identity_agent, network_agent, patch_agent
+    The router selects an agent family.
+
+    The Identity Agent selects the exact tool.
     """
-    
-    def __init__(self):
-        """Initialize the router with available agents."""
-        self.agents = {
-            "password_reset": "identity_agent",
-            "account_unlock": "identity_agent",
-            "grant_access": "identity_agent",
-            "revoke_access": "identity_agent",
-            "get_user_details": "identity_agent",
-            "guest_wifi": "network_agent",
-            "connectivity_check": "network_agent",
-            "software_install": "patch_agent",
-            "patch_management": "patch_agent"
-        }
-        logger.info("AgentRouter initialized")
-    
-    def route(self, intent: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Route request to appropriate agent.
-        
-        Args:
-            intent: The identified intent
-            metadata: Extracted metadata from user input
-            
-        Returns:
-            Dict containing:
-            - agent_name: Name of the agent to execute
-            - agent_type: Type of agent (identity, network, patch)
-            - metadata: Metadata to pass to agent
-            - routing_reason: Why this agent was selected
-        """
-        logger.info(f"Routing intent '{intent}' to appropriate agent")
-        
-        agent_type = self.agents.get(intent, None)
-        
-        if not agent_type:
-            logger.error(f"No agent found for intent: {intent}")
-            raise ValueError(f"Unsupported intent: {intent}")
-        
-        routing_info = {
-            "agent_name": agent_type,
-            "agent_type": agent_type.split("_")[0],  # e.g., "identity" from "identity_agent"
-            "metadata": metadata,
-            "routing_reason": f"Intent '{intent}' maps to {agent_type}"
-        }
-        
-        logger.info(f"Routing info: {routing_info}")
-        return routing_info
-    
-    def get_supported_agents(self) -> list:
-        """Get list of supported agents."""
-        return list(set(self.agents.values()))
+
+    INTENT_AGENT_MAPPING: dict[
+        IntentType,
+        AgentType,
+    ] = {
+        IntentType.PASSWORD_RESET:
+            AgentType.IDENTITY,
+
+        IntentType.ACCOUNT_UNLOCK:
+            AgentType.IDENTITY,
+
+        IntentType.GRANT_ACCESS:
+            AgentType.IDENTITY,
+
+        IntentType.REVOKE_ACCESS:
+            AgentType.IDENTITY,
+
+        IntentType.GET_USER_DETAILS:
+            AgentType.IDENTITY,
+
+        IntentType.FAILED_LOGIN_INVESTIGATION:
+            AgentType.IDENTITY,
+    }
+
+    def route(
+        self,
+        intent: str | IntentType,
+        metadata: dict | None = None,
+    ) -> RoutingResult:
+        try:
+            normalized_intent = (
+                intent
+                if isinstance(
+                    intent,
+                    IntentType,
+                )
+                else IntentType(intent)
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Unsupported intent: {intent}"
+            ) from exc
+
+        agent_type = (
+            self.INTENT_AGENT_MAPPING.get(
+                normalized_intent
+            )
+        )
+
+        if agent_type is None:
+            raise ValueError(
+                f"No agent is registered for "
+                f"intent '{normalized_intent.value}'."
+            )
+
+        result = RoutingResult(
+            agent_name=(
+                f"{agent_type.value}_agent"
+            ),
+            agent_type=agent_type,
+            routing_reason=(
+                f"Intent '{normalized_intent.value}' "
+                f"maps to "
+                f"'{agent_type.value}_agent'."
+            ),
+        )
+
+        logger.info(
+            "AGENT_ROUTED | intent={} | "
+            "selected_agent={}",
+            normalized_intent.value,
+            result.agent_name,
+        )
+
+        return result
+
+    def get_supported_agents(
+        self,
+    ) -> list:
+        return sorted(
+            {
+                f"{agent.value}_agent"
+                for agent in (
+                    self.INTENT_AGENT_MAPPING.values()
+                )
+            }
+        )
