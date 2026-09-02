@@ -4,45 +4,29 @@ Identity Agent Module
 Purpose:
     Validate Identity operation readiness, derive a username from an
     explicitly supplied email when necessary, ask for missing
-    information, select the correct registered tool and execute it.
+    information, select the correct MCP server and execute the correct
+    MCP tool.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
-from collections.abc import Callable
+from typing import Any
 
 from loguru import logger
 
-from App.tools.identity.get_user_details import (
-    GetUserDetailsTool,
-)
-from App.tools.identity.investigate_failed_login import (
-    FailedLoginInvestigationTool,
-)
-from App.tools.identity.manage_access import (
-    AccessManagementTool,
-)
-from App.tools.identity.reset_password import (
-    GraphAPIPasswordResetTool,
-)
-from App.tools.identity.unlock_account import (
-    AccountUnlockTool,
+from App.mcp_client.identity_mcp_client import (
+    IdentityMCPClient,
 )
 from App.workflow.state import (
     AgentExecutionResult,
     IdentityMetadata,
     IntentType,
     MetadataValidationResult,
-    ToolRequest,
+    ToolName,
     ToolResult,
 )
-
-
-ToolHandler = Callable[
-    [ToolRequest],
-    ToolResult,
-]
 
 
 class IdentityAgent:
@@ -53,13 +37,13 @@ class IdentityAgent:
 
     1. Normalize and validate the classified intent.
     2. Normalize Pydantic identity metadata.
-    3. Derive username from an explicitly supplied email address.
+    3. Derive username from an explicitly supplied email.
     4. Determine whether mandatory information is present.
-    5. Ask for missing information without calling a tool.
-    6. Select exactly one tool through a deterministic registry.
-    7. Build the Pydantic ToolRequest.
-    8. Execute and validate the Pydantic ToolResult.
-    9. Log dispatch and execution evidence.
+    5. Ask for missing information without calling MCP.
+    6. Select one MCP server and one MCP tool deterministically.
+    7. Call the selected MCP tool.
+    8. Validate the MCP result as a Pydantic ToolResult.
+    9. Log MCP dispatch and execution evidence.
     """
 
     EMAIL_PATTERN = re.compile(
@@ -75,31 +59,59 @@ class IdentityAgent:
             "email",
             "employee_number",
         ),
+
         IntentType.ACCOUNT_UNLOCK: (
             "username",
             "email",
             "employee_number",
         ),
+
         IntentType.GRANT_ACCESS: (
             "username",
             "email",
             "employee_number",
             "group_name",
         ),
+
         IntentType.REVOKE_ACCESS: (
             "username",
             "email",
             "employee_number",
             "group_name",
         ),
+
         IntentType.GET_USER_DETAILS: (
             "username",
         ),
+
         IntentType.FAILED_LOGIN_INVESTIGATION: (
             "username",
             "email",
             "employee_number",
         ),
+    }
+
+    TOOL_NAMES: dict[
+        IntentType,
+        ToolName,
+    ] = {
+        IntentType.PASSWORD_RESET:
+            ToolName.RESET_PASSWORD,
+
+        IntentType.ACCOUNT_UNLOCK:
+            ToolName.UNLOCK_ACCOUNT,
+
+        IntentType.GRANT_ACCESS:
+            ToolName.MANAGE_ACCESS,
+
+        IntentType.REVOKE_ACCESS:
+            ToolName.MANAGE_ACCESS,
+
+        IntentType.GET_USER_DETAILS:
+            ToolName.GET_USER_DETAILS,
+
+        IntentType.FAILED_LOGIN_INVESTIGATION:
+            ToolName.INVESTIGATE_FAILED_LOGIN,
     }
 
     FIELD_LABELS: dict[str, str] = {
@@ -114,77 +126,16 @@ class IdentityAgent:
     def __init__(
         self,
         *,
-        password_reset_tool: (
-            GraphAPIPasswordResetTool | None
-        ) = None,
-        get_user_details_tool: (
-            GetUserDetailsTool | None
-        ) = None,
-        account_unlock_tool: (
-            AccountUnlockTool | None
-        ) = None,
-        access_management_tool: (
-            AccessManagementTool | None
-        ) = None,
-        failed_login_tool: (
-            FailedLoginInvestigationTool | None
-        ) = None,
+        mcp_client: IdentityMCPClient | None = None,
     ) -> None:
-        password_tool = (
-            password_reset_tool
-            if password_reset_tool is not None
-            else GraphAPIPasswordResetTool()
+        self.mcp_client = (
+            mcp_client
+            if mcp_client is not None
+            else IdentityMCPClient()
         )
-
-        details_tool = (
-            get_user_details_tool
-            if get_user_details_tool is not None
-            else GetUserDetailsTool()
-        )
-
-        unlock_tool = (
-            account_unlock_tool
-            if account_unlock_tool is not None
-            else AccountUnlockTool()
-        )
-
-        access_tool = (
-            access_management_tool
-            if access_management_tool is not None
-            else AccessManagementTool()
-        )
-
-        investigation_tool = (
-            failed_login_tool
-            if failed_login_tool is not None
-            else FailedLoginInvestigationTool()
-        )
-
-        self.tool_registry: dict[
-            IntentType,
-            ToolHandler,
-        ] = {
-            IntentType.PASSWORD_RESET:
-                password_tool.execute,
-
-            IntentType.ACCOUNT_UNLOCK:
-                unlock_tool.execute,
-
-            IntentType.GRANT_ACCESS:
-                access_tool.execute,
-
-            IntentType.REVOKE_ACCESS:
-                access_tool.execute,
-
-            IntentType.GET_USER_DETAILS:
-                details_tool.execute,
-
-            IntentType.FAILED_LOGIN_INVESTIGATION:
-                investigation_tool.execute,
-        }
 
         logger.info(
-            "IdentityAgent initialized | "
+            "IdentityAgent initialized in MCP mode | "
             "supported_operations={}",
             self.get_supported_operations(),
         )
@@ -219,7 +170,7 @@ class IdentityAgent:
         list[str],
     ]:
         """
-        Derive username from an explicitly provided email address.
+        Derive username from an explicitly supplied email.
 
         Example:
 
@@ -228,8 +179,6 @@ class IdentityAgent:
         becomes:
 
             Shreesanyog.Rath
-
-        No other identity values are inferred.
         """
 
         if metadata.username:
@@ -325,8 +274,8 @@ class IdentityAgent:
                 derived_fields=derived_fields,
                 message=(
                     "Additional information is required "
-                    "before the selected Identity tool "
-                    "can be called."
+                    "before the selected MCP tool can be "
+                    "called."
                 ),
             )
 
@@ -379,27 +328,38 @@ class IdentityAgent:
         )
 
     @staticmethod
-    def _get_tool_name(
-        tool_handler: ToolHandler,
-    ):
+    def _build_mcp_arguments(
+        *,
+        intent: IntentType,
+        metadata: IdentityMetadata,
+        request_id: str,
+        correlation_id: str,
+    ) -> dict[str, Any]:
         """
-        Read the ToolName from a bound tool execute method.
+        Build the MCP tool arguments from validated metadata.
         """
 
-        tool_instance = getattr(
-            tool_handler,
-            "__self__",
-            None,
+        arguments: dict[str, Any] = {
+            "request_id": request_id,
+            "correlation_id": correlation_id,
+        }
+
+        metadata_values = metadata.model_dump(
+            mode="json",
+            exclude_none=True,
         )
 
-        if tool_instance is None:
-            return None
-
-        return getattr(
-            tool_instance,
-            "name",
-            None,
+        arguments.update(
+            metadata_values
         )
+
+        if intent is IntentType.GRANT_ACCESS:
+            arguments["action"] = "grant"
+
+        elif intent is IntentType.REVOKE_ACCESS:
+            arguments["action"] = "revoke"
+
+        return arguments
 
     def execute(
         self,
@@ -410,7 +370,44 @@ class IdentityAgent:
         correlation_id: str = "untracked",
     ) -> AgentExecutionResult:
         """
-        Validate and execute an Identity operation.
+        Synchronous compatibility method.
+
+        Existing DemoFlow code can continue calling:
+
+            identity_agent.execute(...)
+
+        FastAPI or other async callers should use execute_async().
+        """
+
+        try:
+            asyncio.get_running_loop()
+
+        except RuntimeError:
+            return asyncio.run(
+                self.execute_async(
+                    operation=operation,
+                    metadata=metadata,
+                    request_id=request_id,
+                    correlation_id=correlation_id,
+                )
+            )
+
+        raise RuntimeError(
+            "IdentityAgent.execute() cannot be called "
+            "inside an active event loop. Use "
+            "'await IdentityAgent.execute_async(...)'."
+        )
+
+    async def execute_async(
+        self,
+        operation: str | IntentType,
+        metadata: dict | IdentityMetadata,
+        *,
+        request_id: str = "untracked",
+        correlation_id: str = "untracked",
+    ) -> AgentExecutionResult:
+        """
+        Validate and execute an Identity operation through MCP.
         """
 
         intent = self._normalize_intent(
@@ -443,24 +440,14 @@ class IdentityAgent:
         )
 
         if intent is IntentType.UNKNOWN:
-            validation = (
-                MetadataValidationResult(
-                    is_valid=False,
-                    missing_fields=[],
-                    derived_fields=[],
-                    message=(
-                        "The requested operation is not "
-                        "supported by the Identity Agent."
-                    ),
-                )
-            )
-
-            logger.warning(
-                "IDENTITY_AGENT_REJECTED | "
-                "request_id={} | correlation_id={} | "
-                "reason=unsupported_intent",
-                request_id,
-                correlation_id,
+            validation = MetadataValidationResult(
+                is_valid=False,
+                missing_fields=[],
+                derived_fields=[],
+                message=(
+                    "The requested operation is not "
+                    "supported by the Identity Agent."
+                ),
             )
 
             return AgentExecutionResult(
@@ -526,20 +513,11 @@ class IdentityAgent:
                 error=None,
             )
 
-        tool_handler = self.tool_registry.get(
+        selected_tool_name = self.TOOL_NAMES.get(
             intent
         )
 
-        if tool_handler is None:
-            logger.error(
-                "IDENTITY_AGENT_REJECTED | "
-                "request_id={} | correlation_id={} | "
-                "intent={} | reason=tool_not_registered",
-                request_id,
-                correlation_id,
-                intent.value,
-            )
-
+        if selected_tool_name is None:
             return AgentExecutionResult(
                 success=False,
                 intent=intent,
@@ -551,97 +529,92 @@ class IdentityAgent:
                 clarification_required=False,
                 clarification_question=None,
                 message=(
-                    f"No Identity tool is registered for "
+                    f"No MCP tool is registered for "
                     f"'{intent.value}'."
                 ),
-                error="Tool not registered",
+                error="MCP tool not registered",
             )
 
-        selected_tool_name = self._get_tool_name(
-            tool_handler
-        )
-
-        if selected_tool_name is None:
-            logger.error(
-                "IDENTITY_AGENT_REJECTED | "
-                "request_id={} | correlation_id={} | "
-                "intent={} | "
-                "reason=tool_name_unavailable",
-                request_id,
-                correlation_id,
-                intent.value,
-            )
-
-            return AgentExecutionResult(
-                success=False,
-                intent=intent,
-                selected_agent="identity_agent",
-                selected_tool=None,
-                metadata=validated_metadata,
-                validation=validation,
-                tool_result=None,
-                clarification_required=False,
-                clarification_question=None,
-                message=(
-                    "The configured tool does not expose "
-                    "a valid tool name."
-                ),
-                error="Invalid tool registration",
-            )
-
-        tool_request = ToolRequest(
-            request_id=request_id,
-            correlation_id=correlation_id,
+        mcp_arguments = self._build_mcp_arguments(
             intent=intent,
             metadata=validated_metadata,
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
+
+        server_module = (
+            self.mcp_client.SERVER_MODULES.get(
+                intent.value
+            )
+        )
+
+        mcp_tool_name = (
+            self.mcp_client.TOOL_NAMES.get(
+                intent.value
+            )
         )
 
         logger.info(
-            "TOOL_DISPATCH | request_id={} | "
-            "correlation_id={} | intent={} | "
-            "selected_agent=identity_agent | "
-            "selected_tool={} | username={} | "
-            "username_source={} | email={} | "
-            "employee_number={} | group_name={} | "
-            "time_window={}",
+            "MCP_TOOL_DISPATCH | "
+            "request_id={} | correlation_id={} | "
+            "intent={} | selected_agent=identity_agent | "
+            "selected_server={} | mcp_tool={} | "
+            "application_tool={}",
             request_id,
             correlation_id,
             intent.value,
+            server_module,
+            mcp_tool_name,
             selected_tool_name.value,
-            validated_metadata.username,
-            validated_metadata.username_source,
-            validated_metadata.email,
-            validated_metadata.employee_number,
-            validated_metadata.group_name,
-            validated_metadata.time_window,
         )
 
         try:
-            raw_tool_result = tool_handler(
-                tool_request
+            mcp_result = (
+                await self.mcp_client.call_tool(
+                    operation=intent.value,
+                    arguments=mcp_arguments,
+                )
             )
 
-            tool_result = (
-                raw_tool_result
-                if isinstance(
-                    raw_tool_result,
-                    ToolResult,
-                )
-                else ToolResult.model_validate(
-                    raw_tool_result
-                )
+            tool_result = ToolResult.model_validate(
+                {
+                    "success":
+                        mcp_result.success,
+
+                    "tool_name":
+                        mcp_result.tool_name,
+
+                    "status":
+                        mcp_result.status,
+
+                    "operation_id":
+                        mcp_result.operation_id,
+
+                    "message":
+                        mcp_result.message,
+
+                    "result":
+                        mcp_result.result,
+
+                    "error":
+                        mcp_result.error,
+
+                    "api_integration_pending":
+                        mcp_result.api_integration_pending,
+                }
             )
 
         except Exception as exc:
             logger.exception(
-                "TOOL_EXECUTION_FAILED | "
+                "MCP_TOOL_EXECUTION_FAILED | "
                 "request_id={} | correlation_id={} | "
-                "intent={} | selected_tool={} | "
-                "error_type={}",
+                "intent={} | selected_server={} | "
+                "mcp_tool={} | error_type={}",
                 request_id,
                 correlation_id,
                 intent.value,
-                selected_tool_name.value,
+                server_module,
+                mcp_tool_name,
                 type(exc).__name__,
             )
 
@@ -656,21 +629,24 @@ class IdentityAgent:
                 clarification_required=False,
                 clarification_question=None,
                 message=(
-                    "The selected Identity tool could "
-                    "not be executed."
+                    "The selected Identity MCP tool "
+                    "could not be executed."
                 ),
                 error=type(exc).__name__,
             )
 
         logger.info(
-            "IDENTITY_AGENT_COMPLETED | "
+            "MCP_TOOL_COMPLETED | "
             "request_id={} | correlation_id={} | "
-            "intent={} | selected_tool={} | "
+            "intent={} | selected_server={} | "
+            "mcp_tool={} | application_tool={} | "
             "tool_status={} | tool_success={} | "
             "operation_id={}",
             request_id,
             correlation_id,
             intent.value,
+            server_module,
+            mcp_tool_name,
             tool_result.tool_name.value,
             tool_result.status.value,
             tool_result.success,
@@ -695,10 +671,10 @@ class IdentityAgent:
         self,
     ) -> list:
         """
-        Return all Identity operations that have registered tools.
+        Return all Identity operations registered through MCP.
         """
 
         return sorted(
             intent.value
-            for intent in self.tool_registry
+            for intent in self.TOOL_NAMES
         )
