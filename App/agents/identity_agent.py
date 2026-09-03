@@ -1,94 +1,52 @@
-"""
-Identity Agent Module
-Author: Shreesanyog
-Purpose: Execute identity-related operations (password reset, account unlock, access provisioning)
-"""
+from __future__ import annotations
 
-from typing import Dict, Any, Optional
+import asyncio
+import re
+from typing import Any
 from loguru import logger
+
+from App.mcp_client.identity_mcp_client import IdentityMCPClient
+from App.workflow.state import AgentExecutionResult, IdentityMetadata, IntentType, MetadataValidationResult, ToolName, ToolResult
 
 
 class IdentityAgent:
-    """
-    Handles all identity-related operations:
-    - Password Reset
-    - Account Unlock
-    - Grant/Revoke Access
-    - Get User Details
-    """
-    
-    def __init__(self):
-        """Initialize the Identity Agent."""
-        self.supported_operations = [
-            "password_reset",
-            "account_unlock",
-            "grant_access",
-            "revoke_access",
-            "get_user_details"
-        ]
-        logger.info("IdentityAgent initialized")
-    
-    def execute(self, operation: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute an identity operation.
-        
-        Args:
-            operation: Type of operation (e.g., 'password_reset', 'get_user_details')
-            metadata: Metadata required for the operation
-                For password_reset:
-                - username: User's username
-                - user_id: User's ID (optional)
-                - email: User's email (optional)
-                For get_user_details:
-                - username: User's username or email
-                
-        Returns:
-            Dict containing:
-            - success: Whether operation succeeded
-            - result: Operation result details
-            - message: User-friendly message
-            - error: Error message if failed
-        """
-        logger.info(f"Identity Agent executing operation: {operation}")
-        logger.debug(f"Metadata: {metadata}")
-        
-        if operation not in self.supported_operations:
-            logger.error(f"Unsupported operation: {operation}")
-            return {
-                "success": False,
-                "result": None,
-                "message": f"Operation '{operation}' not supported",
-                "error": f"Unsupported operation: {operation}"
-            }
-        
-        # Route to specific operation handler
-        if operation == "password_reset":
-            return self._handle_password_reset(metadata)
-        elif operation == "account_unlock":
-            return self._handle_account_unlock(metadata)
-        elif operation == "grant_access":
-            return self._handle_grant_access(metadata)
-        elif operation == "revoke_access":
-            return self._handle_revoke_access(metadata)
-        elif operation == "get_user_details":
-            return self._handle_get_user_details(metadata)
-    
-    def _handle_get_user_details(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle get user details operation.
-        """
-        logger.info("Processing get user details...")
-        
-        # Use email if available (LLM already extracted it), fallback to username
-        user_identifier = metadata.get("email") or metadata.get("username")
-        if not user_identifier:
-            return {
-                "success": False,
-                "result": None,
-                "message": "Username or email is required to get user details",
-                "error": "Missing user identifier in metadata"
-            }
-        
+    EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+    REQUIRED_FIELDS = {
+        IntentType.PASSWORD_RESET: ("username", "email", "employee_number"),
+        IntentType.ACCOUNT_UNLOCK: ("username", "email", "employee_number"),
+        IntentType.GRANT_ACCESS: ("username", "email", "employee_number", "group_name"),
+        IntentType.REVOKE_ACCESS: ("username", "email", "employee_number", "group_name"),
+        IntentType.GET_USER_DETAILS: ("username",),
+        IntentType.FAILED_LOGIN_INVESTIGATION: ("username", "email", "employee_number"),
+    }
+
+    TOOL_NAMES = {
+        IntentType.PASSWORD_RESET: ToolName.RESET_PASSWORD,
+        IntentType.ACCOUNT_UNLOCK: ToolName.UNLOCK_ACCOUNT,
+        IntentType.GRANT_ACCESS: ToolName.MANAGE_ACCESS,
+        IntentType.REVOKE_ACCESS: ToolName.MANAGE_ACCESS,
+        IntentType.GET_USER_DETAILS: ToolName.GET_USER_DETAILS,
+        IntentType.FAILED_LOGIN_INVESTIGATION: ToolName.INVESTIGATE_FAILED_LOGIN,
+    }
+
+    FIELD_LABELS = {
+        "username": "username",
+        "email": "email address",
+        "user_id": "user ID",
+        "employee_number": "employee number",
+        "group_name": "group name",
+        "time_window": "time window",
+    }
+
+    def __init__(self, *, mcp_client: IdentityMCPClient | None = None) -> None:
+        self.mcp_client = mcp_client or IdentityMCPClient()
+        logger.info("IdentityAgent initialized in MCP mode | supported_operations={}", self.get_supported_operations())
+
+    @staticmethod
+    def _normalize_intent(operation: str | IntentType) -> IntentType:
+        if isinstance(operation, IntentType):
+            return operation
         try:
             from App.tools.identity.get_user_details import GetUserDetailsTool
             
@@ -128,46 +86,14 @@ class IdentityAgent:
             }
         
         try:
-            from App.tools.identity.reset_password import GraphAPIPasswordResetTool
-            
-            tool = GraphAPIPasswordResetTool()
-            result = tool.reset_password(username)
-            
-            if result["success"]:
-                return {
-                    "success": True,
-                    "result": result,
-                    "message": f"Password reset successful for {username}",
-                    "error": None
-                }
-            else:
-                return {
-                    "success": False,
-                    "result": None,
-                    "message": result.get("message", "Password reset failed"),
-                    "error": result.get("error")
-                }
-            
-        except Exception as e:
-            logger.error(f"Error in password_reset: {str(e)}")
-            return {
-                "success": False,
-                "result": None,
-                "message": "Failed to reset password",
-                "error": str(e)
-            }
-    
-    def _handle_account_unlock(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle account unlock operation. TODO: Implement"""
-        logger.info("Processing account unlock...")
-        return {"success": False, "result": None, "message": "Not implemented", "error": "Account unlock not yet implemented"}
-    
-    def _handle_grant_access(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle grant access operation. TODO: Implement"""
-        logger.info("Processing grant access...")
-        return {"success": False, "result": None, "message": "Not implemented", "error": "Grant access not yet implemented"}
-    
-    def _handle_revoke_access(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle revoke access operation. TODO: Implement"""
-        logger.info("Processing revoke access...")
-        return {"success": False, "result": None, "message": "Not implemented", "error": "Revoke access not yet implemented"}
+            mcp_result = await self.mcp_client.call_tool(operation=intent.value, arguments=arguments)
+            tool_result = ToolResult.model_validate(mcp_result.model_dump())
+        except Exception as exc:
+            logger.exception("MCP_TOOL_EXECUTION_FAILED | request_id={} | correlation_id={} | intent={} | error_type={}", request_id, correlation_id, intent.value, type(exc).__name__)
+            return AgentExecutionResult(success=False, intent=intent, selected_agent="identity_agent", selected_tool=selected_tool, metadata=validated, validation=validation, tool_result=None, clarification_required=False, clarification_question=None, message="The selected Identity MCP tool could not be executed.", error=type(exc).__name__)
+
+        logger.info("MCP_TOOL_COMPLETED | request_id={} | correlation_id={} | intent={} | application_tool={} | status={} | operation_id={}", request_id, correlation_id, intent.value, tool_result.tool_name.value, tool_result.status.value, tool_result.operation_id)
+        return AgentExecutionResult(success=tool_result.success, intent=intent, selected_agent="identity_agent", selected_tool=tool_result.tool_name, metadata=validated, validation=validation, tool_result=tool_result, clarification_required=False, clarification_question=None, message=tool_result.message, error=tool_result.error)
+
+    def get_supported_operations(self) -> list[str]:
+        return sorted(intent.value for intent in self.TOOL_NAMES)
