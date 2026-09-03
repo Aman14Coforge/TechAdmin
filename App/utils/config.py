@@ -39,6 +39,9 @@ class Config:
     GRAPH_CLIENT_SECRET = os.getenv("GRAPH_CLIENT_SECRET")
     GRAPH_TENANT_ID = os.getenv("GRAPH_TENANT_ID")
     GRAPH_SCOPE = os.getenv("GRAPH_SCOPE", "https://graph.microsoft.com/.default")
+    GRAPH_AUTH_MODE = os.getenv("GRAPH_AUTH_MODE", "delegated")
+    GRAPH_USERNAME = os.getenv("GRAPH_USERNAME")
+    GRAPH_PASSWORD = os.getenv("GRAPH_PASSWORD")
     
     # TODO: Load additional configs from Configs/app_config.yaml
     # - Intent mapping configuration

@@ -47,11 +47,23 @@ print(f"\nGRAPH_TENANT_ID: {tenant_id if tenant_id else 'NOT SET ❌'}")
 if tenant_id:
     print(f"  Length: {len(tenant_id)} chars")
 
+auth_mode = os.getenv("GRAPH_AUTH_MODE", "delegated")
+graph_username = os.getenv("GRAPH_USERNAME")
+graph_password = os.getenv("GRAPH_PASSWORD")
+
+print(f"\nGRAPH_AUTH_MODE: {auth_mode}")
+print(f"GRAPH_USERNAME: {graph_username if graph_username else 'NOT SET ❌'}")
+print(f"GRAPH_PASSWORD: {'SET (' + str(len(graph_password)) + ' chars)' if graph_password else 'NOT SET ❌'}")
+
 print("\n" + "=" * 80)
 print("VERIFICATION RESULT")
 print("=" * 80)
 
-all_set = all([client_id, client_secret, tenant_id])
+if auth_mode == "delegated":
+    all_set = all([client_id, tenant_id, graph_username, graph_password])
+else:
+    all_set = all([client_id, client_secret, tenant_id])
+
 if all_set:
     print("✅ ALL CREDENTIALS ARE SET!")
     print("\nNow testing authentication...")
@@ -62,23 +74,37 @@ if all_set:
     
     print(f"\nClient ID in object: {client.client_id[:8]}...{client.client_id[-8:]}")
     print(f"Tenant ID in object: {client.tenant_id}")
+    print(f"Auth mode: {client.auth_mode}")
     print(f"Token URL: {client.token_url}")
     
     print("\nAttempting authentication...")
     if client.authenticate():
         print("✅ AUTHENTICATION SUCCESSFUL!")
         print(f"Access token obtained: {len(client.access_token)} chars")
-        print(f"Token preview: {client.access_token}...")
+        
+        test_user = graph_username
+        print(f"\nTesting user lookup for: {test_user}")
+        user = client.get_user_details(test_user)
+        if user:
+            print("✅ GRAPH API CALL SUCCESSFUL!")
+            print(user)
+        else:
+            print("❌ GRAPH API CALL FAILED - see error above")
     else:
         print("❌ AUTHENTICATION FAILED!")
-        print("Check if app has correct permissions in Azure AD")
+        print("Check credentials and app permissions in Azure AD")
 else:
     print("❌ CREDENTIALS NOT SET!")
     if not client_id:
         print("  - GRAPH_CLIENT_ID is missing")
-    if not client_secret:
-        print("  - GRAPH_CLIENT_SECRET is missing")
     if not tenant_id:
         print("  - GRAPH_TENANT_ID is missing")
+    if auth_mode == "delegated":
+        if not graph_username:
+            print("  - GRAPH_USERNAME is missing")
+        if not graph_password:
+            print("  - GRAPH_PASSWORD is missing")
+    elif not client_secret:
+        print("  - GRAPH_CLIENT_SECRET is missing")
 
 print("\n" + "=" * 80)

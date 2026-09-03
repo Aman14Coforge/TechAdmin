@@ -45,23 +45,10 @@ class GetUserDetailsTool:
         logger.info(f"Getting user details for: {user_identifier}")
         
         try:
-            # Authenticate if not already done
-            if not self.graph_client.access_token:
-                if not self.graph_client.authenticate():
-                    return {
-                        "success": False,
-                        "message": "Failed to authenticate with Microsoft Graph API",
-                        "user_data": None,
-                        "error": "Authentication failed"
-                    }
-            
-            # If user_identifier doesn't contain @, try adding common domain
-            if "@" not in user_identifier:
-                # Try to find user by username
-                user_data = self.graph_client.find_user_by_username(user_identifier)
-            else:
-                # Direct lookup by email
+            if "@" in user_identifier:
                 user_data = self.graph_client.get_user_details(user_identifier, fields)
+            else:
+                user_data = self.graph_client.find_user_by_username(user_identifier)
             
             if not user_data:
                 return {
