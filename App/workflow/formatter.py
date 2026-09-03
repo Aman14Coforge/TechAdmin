@@ -40,10 +40,14 @@ class ResponseFormatter:
         
         if success:
             # TODO: Use template system
-            return (
-                f"✅ Password reset completed successfully for user '{username}'.\n"
-                f"The user will receive password reset instructions via email."
-            )
+            message = f"✅ Password reset completed successfully for user '{username}'."
+            
+            # Demo only - in production deliver this out-of-band, never in the response
+            temp_password = (result or {}).get("new_password")
+            if temp_password:
+                message += f"\nTemporary password: {temp_password}"
+            
+            return message
         else:
             return (
                 f"❌ Password reset failed for user '{username}'.\n"

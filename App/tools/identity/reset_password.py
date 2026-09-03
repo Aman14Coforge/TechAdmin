@@ -1,44 +1,14 @@
-"""
-Password Reset Tool Module
-
-Purpose:
-    Execute password reset operations through the existing
-    MicrosoftGraphClient integration.
-
-Compatibility:
-    - Existing callers can continue using reset_password(username).
-    - Updated Identity Agent code can use execute(ToolRequest).
-    - The existing Microsoft Graph integration is not changed.
-"""
-
+"""Password reset application tool backed by MicrosoftGraphClient."""
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
-
 from loguru import logger
 
 from App.integration.microsoft_graph import MicrosoftGraphClient
-from App.workflow.state import (
-    IdentityMetadata,
-    IntentType,
-    ToolName,
-    ToolRequest,
-    ToolResult,
-    ToolStatus,
-)
+from App.workflow.state import IdentityMetadata, IntentType, ToolName, ToolRequest, ToolResult, ToolStatus
 
 
 class GraphAPIPasswordResetTool:
-    """
-    Password-reset tool using the existing Microsoft Graph API client.
-
-    The execute() method is the production tool interface used by the
-    Identity Agent.
-
-    The reset_password() method is retained for backward compatibility
-    with existing code.
-    """
-
     name = ToolName.RESET_PASSWORD
 
     def __init__(
@@ -46,447 +16,126 @@ class GraphAPIPasswordResetTool:
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
         tenant_id: Optional[str] = None,
-        graph_client: Optional[MicrosoftGraphClient] = None,
+        graph_client: MicrosoftGraphClient | None = None,
     ) -> None:
-        """
-        Initialize the Password Reset Tool.
-
-        Args:
-            client_id:
-                Azure AD Application ID.
-
-            client_secret:
-                Azure AD Application Secret.
-
-            tenant_id:
-                Azure Tenant ID.
-
-            graph_client:
-                Optional injected MicrosoftGraphClient. This is useful
-                for tests and dependency injection.
-        """
-
-        self.graph_client = (
-            graph_client
-            if graph_client is not None
-            else MicrosoftGraphClient(
-                client_id=client_id,
-                client_secret=client_secret,
-                tenant_id=tenant_id,
-            )
+        self.graph_client = graph_client or MicrosoftGraphClient(
+            client_id=client_id,
+            client_secret=client_secret,
+            tenant_id=tenant_id,
         )
+        logger.info("GraphAPIPasswordResetTool initialized")
 
-        logger.info(
-            "GraphAPIPasswordResetTool initialized"
-        )
-
-    def execute(
-        self,
-        request: ToolRequest,
-    ) -> ToolResult:
-        """
-        Execute password reset using a validated Pydantic ToolRequest.
-
-        Resolution order:
-
-        1. Email address
-        2. Explicit Graph user ID
-        3. Username
-
-        Returns:
-            Pydantic ToolResult containing tool execution status.
-
-        Security:
-            The temporary password is not logged and is not returned in
-            the normal ToolResult payload.
-        """
-
+    def execute(self, request: ToolRequest) -> ToolResult:
         metadata = request.metadata
-
-        user_identifier = self._get_user_identifier(
-            metadata
-        )
-
+        identifier = metadata.email or metadata.user_id or metadata.username
         logger.info(
-            "TOOL_CALL | "
-            "request_id={} | "
-            "correlation_id={} | "
-            "intent={} | "
-            "tool={} | "
-            "username={} | "
-            "username_source={} | "
-            "email={} | "
-            "user_id={} | "
-            "employee_number={}",
+            "TOOL_CALL | request_id={} | correlation_id={} | intent={} | tool={} | username={} | email={} | user_id={} | employee_number={}",
             request.request_id,
             request.correlation_id,
             request.intent.value,
             self.name.value,
             metadata.username,
-            metadata.username_source,
             metadata.email,
             metadata.user_id,
             metadata.employee_number,
         )
-
-        if not user_identifier:
-            result = ToolResult(
-                success=False,
-                tool_name=self.name,
-                status=ToolStatus.REJECTED,
-                message=(
-                    "A username, email address, or user ID "
-                    "is required for password reset."
-                ),
-                result=None,
-                error="Missing user identifier",
-                api_integration_pending=False,
-            )
-
-            self._log_result(
-                request=request,
-                result=result,
-            )
-
-            return result
+        if not identifier:
+            return self._result(request, False, ToolStatus.REJECTED, "A username, email address, or user ID is required for password reset.", error="Missing user identifier")
 
         try:
-            authentication_result = (
-                self._ensure_authenticated()
-            )
-
-            if not authentication_result:
-                result = ToolResult(
-                    success=False,
-                    tool_name=self.name,
-                    status=ToolStatus.FAILED,
-                    message=(
-                        "Failed to authenticate with "
-                        "Microsoft Graph API."
-                    ),
-                    result=None,
-                    error="Microsoft Graph authentication failed",
-                    api_integration_pending=False,
-                )
-
-                self._log_result(
-                    request=request,
-                    result=result,
-                )
-
-                return result
-
-            user_data = self._resolve_user(
-                user_identifier
-            )
-
+            user_data = self.graph_client.find_user_by_username(identifier)
             if not user_data:
-                result = ToolResult(
-                    success=False,
-                    tool_name=self.name,
-                    status=ToolStatus.FAILED,
-                    message=(
-                        f"User '{user_identifier}' was not "
-                        "found in Azure AD."
-                    ),
-                    result=None,
-                    error="User not found",
-                    api_integration_pending=False,
-                )
-
-                self._log_result(
-                    request=request,
-                    result=result,
-                )
-
-                return result
+                return self._result(request, False, ToolStatus.FAILED, f"User '{identifier}' was not found in Azure AD.", error="User not found")
 
             graph_user_id = user_data.get("id")
-
-            user_principal_name = user_data.get(
-                "userPrincipalName"
-            )
-
             if not graph_user_id:
-                result = ToolResult(
-                    success=False,
-                    tool_name=self.name,
-                    status=ToolStatus.FAILED,
-                    message=(
-                        "The resolved user does not contain "
-                        "a Microsoft Graph user ID."
-                    ),
-                    result=None,
-                    error="Microsoft Graph user ID missing",
-                    api_integration_pending=False,
-                )
+                return self._result(request, False, ToolStatus.FAILED, "Resolved user does not contain a Microsoft Graph user ID.", error="Graph user ID missing")
 
-                self._log_result(
-                    request=request,
-                    result=result,
-                )
-
-                return result
-
-            logger.info(
-                "PASSWORD_RESET_API_CALL | "
-                "request_id={} | "
-                "correlation_id={} | "
-                "graph_user_id={} | "
-                "user_principal_name={}",
-                request.request_id,
-                request.correlation_id,
-                graph_user_id,
-                user_principal_name,
-            )
-
-            temporary_password = (
-                self.graph_client.reset_password(
-                    graph_user_id
-                )
-            )
-
+            temporary_password = self.graph_client.reset_password(graph_user_id)
             if not temporary_password:
-                result = ToolResult(
-                    success=False,
-                    tool_name=self.name,
-                    status=ToolStatus.FAILED,
-                    message=(
-                        "Password reset API call failed."
-                    ),
-                    result={
-                        "user_id": graph_user_id,
-                        "user_principal_name":
-                            user_principal_name,
-                    },
+                return self._result(
+                    request,
+                    False,
+                    ToolStatus.FAILED,
+                    "Password reset API call failed.",
+                    result={"user_id": graph_user_id, "user_principal": user_data.get("userPrincipalName")},
                     error="Password reset API call failed",
-                    api_integration_pending=False,
                 )
 
-                self._log_result(
-                    request=request,
-                    result=result,
-                )
-
-                return result
-
-            # Do not log or place the temporary password in ToolResult.
-            # A separate approved secure delivery process should handle it.
-            result = ToolResult(
-                success=True,
-                tool_name=self.name,
-                status=ToolStatus.COMPLETED,
-                message=(
-                    "Password reset completed successfully. "
-                    "A temporary password was generated."
-                ),
+            # The password is returned only because the existing UI formatter currently expects it.
+            # Do not log this value. Remove it when secure out-of-band delivery is implemented.
+            return self._result(
+                request,
+                True,
+                ToolStatus.COMPLETED,
+                f"Password reset successful for {user_data.get('userPrincipalName')}.",
                 result={
                     "user_id": graph_user_id,
-                    "user_principal_name":
-                        user_principal_name,
-                    "temporary_password_generated": True,
-                    "temporary_password_redacted": True,
+                    "user_principal": user_data.get("userPrincipalName"),
+                    "new_password": temporary_password,
                 },
-                error=None,
-                api_integration_pending=False,
             )
-
-            self._log_result(
-                request=request,
-                result=result,
-            )
-
-            return result
-
         except Exception as exc:
-            logger.exception(
-                "TOOL_FAILED | "
-                "request_id={} | "
-                "correlation_id={} | "
-                "intent={} | "
-                "tool={} | "
-                "error_type={}",
-                request.request_id,
-                request.correlation_id,
-                request.intent.value,
-                self.name.value,
-                type(exc).__name__,
-            )
+            logger.exception("PASSWORD_RESET_TOOL_FAILED | request_id={} | correlation_id={} | error_type={}", request.request_id, request.correlation_id, type(exc).__name__)
+            return self._result(request, False, ToolStatus.FAILED, "Error resetting password.", error=type(exc).__name__)
 
-            return ToolResult(
-                success=False,
-                tool_name=self.name,
-                status=ToolStatus.FAILED,
-                message=(
-                    "An unexpected error occurred during "
-                    "password reset."
-                ),
-                result=None,
-                error=type(exc).__name__,
-                api_integration_pending=False,
-            )
-
-    @staticmethod
-    def _get_user_identifier(
-        metadata: IdentityMetadata,
-    ) -> Optional[Any]:
-        """
-        Return the strongest available identity value.
-        """
-
-        return (
-            metadata.email
-            or metadata.user_id
-            or metadata.username
-        )
-
-    def _ensure_authenticated(
+    def _result(
         self,
-    ) -> bool:
-        """
-        Authenticate only when no access token is available.
-        """
-
-        if self.graph_client.access_token:
-            return True
-
-        return self.graph_client.authenticate()
-
-    def _resolve_user(
-        self,
-        user_identifier: str,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Resolve the user using the existing Microsoft Graph client.
-
-        Email/UPN:
-            Direct Microsoft Graph user lookup.
-
-        Username:
-            Existing find_user_by_username implementation.
-        """
-
-        if "@" in user_identifier:
-            return self.graph_client.get_user_details(
-                user_identifier
-            )
-
-        return self.graph_client.find_user_by_username(
-            user_identifier
-        )
-
-    @staticmethod
-    def _log_result(
-        *,
         request: ToolRequest,
-        result: ToolResult,
-    ) -> None:
-        """
-        Log only non-secret execution evidence.
-        """
-
+        success: bool,
+        status: ToolStatus,
+        message: str,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> ToolResult:
+        output = ToolResult(
+            success=success,
+            tool_name=self.name,
+            status=status,
+            message=message,
+            result=result,
+            error=error,
+            api_integration_pending=False,
+        )
         logger.info(
-            "TOOL_RESULT | "
-            "request_id={} | "
-            "correlation_id={} | "
-            "intent={} | "
-            "tool={} | "
-            "status={} | "
-            "success={} | "
-            "operation_id={} | "
-            "temporary_password_redacted=true",
+            "TOOL_RESULT | request_id={} | correlation_id={} | tool={} | status={} | success={} | operation_id={}",
             request.request_id,
             request.correlation_id,
-            request.intent.value,
-            result.tool_name.value,
-            result.status.value,
-            result.success,
-            result.operation_id,
+            output.tool_name.value,
+            output.status.value,
+            output.success,
+            output.operation_id,
         )
+        return output
 
-    def reset_password(
-        self,
-        username: str,
-    ) -> Dict[str, Any]:
-        """
-        Backward-compatible interface.
-
-        The updated IdentityAgent should use execute(ToolRequest).
-        """
-
+    def reset_password(self, username: str) -> Dict[str, Any]:
         request = ToolRequest(
             request_id="legacy_request",
             correlation_id="legacy_correlation",
             intent=IntentType.PASSWORD_RESET,
             metadata=IdentityMetadata(
-                username=username,
-                username_source="explicit",
+                username=username if "@" not in username else username.split("@", 1)[0],
+                email=username if "@" in username else None,
+                username_source="derived_from_email" if "@" in username else "explicit",
             ),
         )
+        tool_result = self.execute(request)
+        legacy = tool_result.result or {}
+        return {
+            "success": tool_result.success,
+            "message": tool_result.message,
+            "user_id": legacy.get("user_id"),
+            "user_principal": legacy.get("user_principal"),
+            "new_password": legacy.get("new_password"),
+            "error": tool_result.error,
+        }
 
-        result = self.execute(
-            request
-        )
-
-        return result.model_dump(
-            mode="json",
-        )
-
-    def validate_username(
-        self,
-        username: str,
-    ) -> tuple[bool, str]:
-        """
-        Validate that a username or UPN exists in Azure AD.
-        """
-
-        if not username:
-            return (
-                False,
-                "Username is required",
-            )
-
-        normalized_username = username.strip()
-
-        if len(normalized_username) < 3:
-            return (
-                False,
-                "Invalid username format",
-            )
-
+    def validate_username(self, username: str) -> tuple[bool, str]:
+        if not username or len(username.strip()) < 3:
+            return False, "Invalid username format"
         try:
-            if not self._ensure_authenticated():
-                return (
-                    False,
-                    "Microsoft Graph authentication failed",
-                )
-
-            user_data = self._resolve_user(
-                normalized_username
-            )
-
-            if user_data:
-                return (
-                    True,
-                    "Username is valid",
-                )
-
-            return (
-                False,
-                "User not found in Azure AD",
-            )
-
+            user_data = self.graph_client.find_user_by_username(username.strip())
+            return (True, "Username is valid") if user_data else (False, "User not found in Azure AD")
         except Exception as exc:
-            logger.exception(
-                "USERNAME_VALIDATION_FAILED | "
-                "username={} | "
-                "error_type={}",
-                normalized_username,
-                type(exc).__name__,
-            )
-
-            return (
-                False,
-                f"Validation error: "
-                f"{type(exc).__name__}",
-            )
+            logger.error("Error validating username: {}", type(exc).__name__)
+            return False, f"Validation error: {type(exc).__name__}"
