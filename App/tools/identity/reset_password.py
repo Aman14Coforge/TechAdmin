@@ -43,7 +43,10 @@ class GraphAPIPasswordResetTool:
             return self._result(request, False, ToolStatus.REJECTED, "A username, email address, or user ID is required for password reset.", error="Missing user identifier")
 
         try:
-            user_data = self.graph_client.find_user_by_username(identifier)
+            # Find user (handles both bare usernames and full UPNs)
+            logger.info(f"Finding user: {username}")
+            user_data = self.graph_client.find_user_by_username(username)
+            
             if not user_data:
                 return self._result(request, False, ToolStatus.FAILED, f"User '{identifier}' was not found in Azure AD.", error="User not found")
 

@@ -48,74 +48,43 @@ class IdentityAgent:
         if isinstance(operation, IntentType):
             return operation
         try:
-            return IntentType(operation.strip())
-        except (ValueError, AttributeError):
-            return IntentType.UNKNOWN
-
-    @classmethod
-    def _derive_username_from_email(cls, metadata: IdentityMetadata) -> tuple[IdentityMetadata, list[str]]:
-        if metadata.username:
-            return metadata.model_copy(update={"username_source": metadata.username_source or "explicit"}), []
-        if metadata.email and cls.EMAIL_PATTERN.fullmatch(metadata.email):
-            username = metadata.email.split("@", 1)[0].strip()
-            return metadata.model_copy(update={"username": username, "username_source": "derived_from_email"}), ["username"]
-        return metadata, []
-
-    @classmethod
-    def _validate_metadata(cls, *, intent: IntentType, metadata: IdentityMetadata, derived_fields: list[str]) -> MetadataValidationResult:
-        required = cls.REQUIRED_FIELDS.get(intent, ())
-        missing = [name for name in required if getattr(metadata, name) is None]
-        return MetadataValidationResult(
-            is_valid=bool(required) and not missing,
-            missing_fields=missing,
-            derived_fields=derived_fields,
-            message="Metadata is valid." if required and not missing else "Additional information is required before the selected MCP tool can be called.",
-        )
-
-    @classmethod
-    def _build_clarification_question(cls, missing_fields: list[str]) -> str:
-        labels = [cls.FIELD_LABELS.get(name, name) for name in missing_fields]
-        if not labels:
-            return "Please provide the required identity information."
-        if len(labels) == 1:
-            return f"Please provide the {labels[0]}."
-        if len(labels) == 2:
-            return f"Please provide the following missing information: {labels[0]} and {labels[1]}."
-        return "Please provide the following missing information: " + ", ".join(labels[:-1]) + f", and {labels[-1]}."
-
-    @staticmethod
-    def _build_arguments(*, intent: IntentType, metadata: IdentityMetadata, request_id: str, correlation_id: str) -> dict[str, Any]:
-        arguments = metadata.model_dump(mode="json", exclude_none=True)
-        arguments.update({"request_id": request_id, "correlation_id": correlation_id})
-        if intent is IntentType.GRANT_ACCESS:
-            arguments["action"] = "grant"
-        elif intent is IntentType.REVOKE_ACCESS:
-            arguments["action"] = "revoke"
-        return arguments
-
-    def execute(self, operation: str | IntentType, metadata: dict | IdentityMetadata, *, request_id: str = "untracked", correlation_id: str = "untracked") -> AgentExecutionResult:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.execute_async(operation, metadata, request_id=request_id, correlation_id=correlation_id))
-        raise RuntimeError("Use await execute_async() inside an active event loop.")
-
-    async def execute_async(self, operation: str | IntentType, metadata: dict | IdentityMetadata, *, request_id: str = "untracked", correlation_id: str = "untracked") -> AgentExecutionResult:
-        intent = self._normalize_intent(operation)
-        validated = metadata if isinstance(metadata, IdentityMetadata) else IdentityMetadata.model_validate(metadata)
-        if intent is IntentType.UNKNOWN:
-            validation = MetadataValidationResult(is_valid=False, missing_fields=[], derived_fields=[], message="The requested operation is not supported by the Identity Agent.")
-            return AgentExecutionResult(success=False, intent=intent, selected_agent="identity_agent", selected_tool=None, metadata=validated, validation=validation, tool_result=None, clarification_required=False, clarification_question=None, message=validation.message, error="Unsupported identity operation")
-
-        validated, derived = self._derive_username_from_email(validated)
-        validation = self._validate_metadata(intent=intent, metadata=validated, derived_fields=derived)
-        if not validation.is_valid:
-            question = self._build_clarification_question(validation.missing_fields)
-            return AgentExecutionResult(success=False, intent=intent, selected_agent="identity_agent", selected_tool=None, metadata=validated, validation=validation, tool_result=None, clarification_required=True, clarification_question=question, message=question, error=None)
-
-        selected_tool = self.TOOL_NAMES.get(intent)
-        arguments = self._build_arguments(intent=intent, metadata=validated, request_id=request_id, correlation_id=correlation_id)
-        logger.info("MCP_TOOL_DISPATCH | request_id={} | correlation_id={} | intent={} | selected_server={} | selected_mcp_tool={} | application_tool={}", request_id, correlation_id, intent.value, self.mcp_client.SERVER_MODULES.get(intent.value), self.mcp_client.TOOL_NAMES.get(intent.value), selected_tool.value if selected_tool else None)
+            from App.tools.identity.get_user_details import GetUserDetailsTool
+            
+            tool = GetUserDetailsTool()
+            result = tool.get_details(user_identifier)
+            
+            return {
+                "success": result.get("success", False),
+                "result": result.get("user_data"),
+                "message": result.get("message"),
+                "error": result.get("error")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in get_user_details: {str(e)}")
+            return {
+                "success": False,
+                "result": None,
+                "message": "Failed to retrieve user details",
+                "error": str(e)
+            }
+    
+    def _handle_password_reset(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle password reset operation.
+        """
+        logger.info("Processing password reset...")
+        
+        # Prefer email if the LLM extracted one; it is unambiguous for Graph lookups
+        username = metadata.get("email") or metadata.get("username")
+        if not username:
+            return {
+                "success": False,
+                "result": None,
+                "message": "Username is required for password reset",
+                "error": "Missing username in metadata"
+            }
+        
         try:
             mcp_result = await self.mcp_client.call_tool(operation=intent.value, arguments=arguments)
             tool_result = ToolResult.model_validate(mcp_result.model_dump())

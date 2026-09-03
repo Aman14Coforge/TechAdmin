@@ -38,7 +38,11 @@ class GetUserDetailsTool:
         if not identifier:
             return self._result(request, False, ToolStatus.REJECTED, "A username, email address, or user ID is required.", error="Missing user identifier")
         try:
-            user_data = self.graph_client.get_user_details(identifier) if "@" in identifier else self.graph_client.find_user_by_username(identifier)
+            if "@" in user_identifier:
+                user_data = self.graph_client.get_user_details(user_identifier, fields)
+            else:
+                user_data = self.graph_client.find_user_by_username(user_identifier)
+            
             if not user_data:
                 return self._result(request, False, ToolStatus.FAILED, f"User '{identifier}' was not found in Azure AD.", error="User not found")
             safe_data = {
