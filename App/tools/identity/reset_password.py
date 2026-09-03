@@ -45,24 +45,9 @@ class GraphAPIPasswordResetTool:
         logger.info(f"Attempting to reset password for user: {username}")
         
         try:
-            # Authenticate if not already done
-            if not self.graph_client.access_token:
-                if not self.graph_client.authenticate():
-                    logger.error("Authentication failed")
-                    return {
-                        "success": False,
-                        "message": "Failed to authenticate with Microsoft Graph API",
-                        "user_id": None,
-                        "new_password": None,
-                        "error": "Authentication failed"
-                    }
-            
-            # Find user
+            # Find user (handles both bare usernames and full UPNs)
             logger.info(f"Finding user: {username}")
-            if "@" not in username:
-                user_data = self.graph_client.find_user_by_username(username)
-            else:
-                user_data = self.graph_client.get_user_details(username)
+            user_data = self.graph_client.find_user_by_username(username)
             
             if not user_data:
                 logger.error(f"User not found: {username}")

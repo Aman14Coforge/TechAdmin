@@ -117,7 +117,8 @@ class IdentityAgent:
         """
         logger.info("Processing password reset...")
         
-        username = metadata.get("username")
+        # Prefer email if the LLM extracted one; it is unambiguous for Graph lookups
+        username = metadata.get("email") or metadata.get("username")
         if not username:
             return {
                 "success": False,
