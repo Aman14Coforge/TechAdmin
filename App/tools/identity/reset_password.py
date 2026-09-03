@@ -44,8 +44,8 @@ class GraphAPIPasswordResetTool:
 
         try:
             # Find user (handles both bare usernames and full UPNs)
-            logger.info(f"Finding user: {username}")
-            user_data = self.graph_client.find_user_by_username(username)
+            logger.info(f"Finding user: {identifier}")
+            user_data = self.graph_client.find_user_by_username(identifier)
             
             if not user_data:
                 return self._result(request, False, ToolStatus.FAILED, f"User '{identifier}' was not found in Azure AD.", error="User not found")
