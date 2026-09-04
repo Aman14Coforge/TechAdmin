@@ -1,0 +1,42 @@
+[
+  {
+    "recorded_at": "2026-09-02T09:50:38.824147+00:00",
+    "original_user_input": "Reset password for username test.user, email test.user@example.com, employee number EMP10001",
+    "complete_user_input": "Reset password for username test.user, email test.user@example.com, employee number EMP10001",
+    "request_id": "demo_41c1a561fb45",
+    "correlation_id": "corr_bd8db39fe6bc40cea926e8edd7d2cfe4",
+    "intent": "unknown",
+    "selected_agent": null,
+    "selected_mcp_server": null,
+    "selected_mcp_tool": null,
+    "selected_tool": null,
+    "response": {
+      "success": false,
+      "request_id": "demo_41c1a561fb45",
+      "correlation_id": "corr_bd8db39fe6bc40cea926e8edd7d2cfe4",
+      "user_input": "Reset password for username test.user, email test.user@example.com, employee number EMP10001",
+      "intent": "unknown",
+      "confidence": 0.0,
+      "explanation": "Intent and metadata extraction failed.",
+      "metadata": {
+        "username": null,
+        "user_id": null,
+        "email": null,
+        "employee_number": null,
+        "group_name": null,
+        "time_window": null,
+        "username_source": null
+      },
+      "validation": null,
+      "selected_agent": null,
+      "selected_mcp_server": null,
+      "selected_mcp_tool": null,
+      "selected_tool": null,
+      "tool_result": null,
+      "clarification_required": false,
+      "clarification_question": null,
+      "message": "Intent and metadata extraction failed.",
+      "error": "ConnectError"
+    }
+  }
+]
