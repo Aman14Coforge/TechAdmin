@@ -1682,11 +1682,11 @@ class UnifiedIntentMetadataExtractor:
 
         Example:
 
-            Shreesanyog.Rath@Coforge.com
+            Amit.Bhagat@Coforge.com
 
         becomes:
 
-            username = Shreesanyog.Rath
+            username = Amit.Bhagat
             username_source = derived_from_email
 
         This is deterministic normalization and does not require another
