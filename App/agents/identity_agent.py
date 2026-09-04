@@ -57,7 +57,7 @@ class IdentityAgent:
         IntentType.PASSWORD_RESET: (
             "username",
             "email",
-            "employee_number",
+            #"employee_number",
         ),
 
         IntentType.ACCOUNT_UNLOCK: (

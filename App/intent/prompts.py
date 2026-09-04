@@ -1,283 +1,208 @@
+# """
+# LLM Prompts Module
+# Author: Amit Bhagat
+# Purpose: Store and manage prompts for intent classification and metadata extraction
+# """
+
+# # Intent Classification Prompt
+# INTENT_CLASSIFICATION_PROMPT = """You are an IT support assistant. Analyze the user request and identify the intent.
+
+# IMPORTANT: Be careful about keywords:
+# - "get details", "show info", "user information", "account info" = get_user_details
+# - "reset password", "change password", "new password" = password_reset  
+# - "unlock account", "unlock user" = account_unlock
+# - "grant access", "give access", "provide access" = grant_access
+# - "revoke access", "remove access" = revoke_access
+
+# User Request: {user_input}
+
+# Classify the intent as ONE of: get_user_details, password_reset, account_unlock, grant_access, revoke_access
+
+# Respond in VALID JSON format ONLY:
+# {{
+#     "intent": "<identified_intent>",
+#     "confidence": <confidence_score_0_to_1>,
+#     "explanation": "<brief_explanation>"
+# }}
+
+# Only respond with valid JSON, no additional text."""
+
+# # Metadata Extraction Prompt
+# METADATA_EXTRACTION_PROMPT = """You are an IT support assistant. Extract structured information from the user request.
+
+# User Request: {user_input}
+# Identified Intent: {intent}
+
+# Extract the following information if available in the request:
+# - username: User's username (AD format: firstname.lastname or email prefix)
+# - user_id: User's unique ID or Employee ID
+# - email: User's email address (format: user@domain.com)
+# - employee_number: Employee number if mentioned
+
+# IMPORTANT: 
+# - Extract email if it's in the request (format: something@domain.com)
+# - Extract username/first.last if it's in the request
+# - If email is present, extract the username part before @
+# - Set to null if not found in the request text
+
+# Respond in VALID JSON format ONLY:
+# {{
+#     "username": "<username_or_null>",
+#     "user_id": "<user_id_or_null>",
+#     "email": "<email_or_null>",
+#     "employee_number": "<employee_number_or_null>"
+# }}
+
+# Only respond with valid JSON, no additional text."""
+
+# # TODO: Add more prompts as needed for other intents and operations
+
+
 """
 LLM Prompts Module
+Author: Amit Bhagat
+Purpose: Store and manage prompts for intent classification and metadata extraction.
 
-Purpose:
-    Define controlled prompts for intent classification and metadata
-    extraction.
+Three prompts are defined:
+  - INTENT_CLASSIFICATION_PROMPT : intent only
+  - METADATA_EXTRACTION_PROMPT   : metadata only, given a known intent
+  - UNIFIED_EXTRACTION_PROMPT    : both in a single call
+
+The intent list and the extraction rules are kept as shared blocks so that a rule
+only has to be edited in one place.
 """
 
+# Shared intent definitions used by the classification and unified prompts.
+_INTENT_RULES = """Supported intents:
+- get_user_details : "get details", "show info", "user information", "account info", "look up user"
+- password_reset   : "reset password", "change password", "new password", "forgot password"
+- account_unlock   : "unlock account", "unlock user", "account is locked", "locked out"
+- grant_access     : "grant access", "give access", "provide access", "add to group"
+- revoke_access    : "revoke access", "remove access", "take away access", "remove from group"
+- unknown          : anything else, such as hardware faults, network issues or software installs
 
-INTENT_CLASSIFICATION_PROMPT = """
-You are the intent-classification component of an enterprise IT
-administration platform.
+Rules:
+- "remove access" and "revoke" are always revoke_access, never grant_access.
+- A request that only asks to SEE information is get_user_details, even if it mentions
+  a password or a locked account.
+- If the request does not match any supported intent, answer "unknown"."""
 
-Analyze the user's request and classify it into exactly one supported
-intent.
+# Shared metadata rules used by the extraction and unified prompts.
+_METADATA_RULES = """Fields to extract:
+- username        : AD username, usually first.last. If only an email is given, use the part before the @.
+- user_id         : user or employee ID, only if explicitly stated
+- email           : full address in the form something@domain.com
+- employee_number : employee number, only if explicitly stated
 
-SUPPORTED INTENTS
+Rules:
+- Copy values exactly as they appear in the request. Do not guess or invent them.
+- If a field is not present in the request, use the JSON value null (not the text "null")."""
 
-1. get_user_details
-   Use when the user asks to retrieve, display, find or inspect account
-   details or user information.
+# Shared output rules.
+_OUTPUT_RULES = """Output rules:
+- Respond with a single JSON object and nothing else.
+- No markdown, no explanation before or after, no <think> block.
+- confidence must be a number between 0 and 1, not a string."""
 
-   Common examples:
-   - get user details
-   - show user information
-   - find account information
-   - check account status
-   - retrieve user record
 
-2. password_reset
-   Use when the user asks to reset, change, replace or recover a
-   password.
+INTENT_CLASSIFICATION_PROMPT = """You are an IT support assistant. Identify the intent of the user request.
 
-   Common examples:
-   - reset password
-   - forgot password
-   - password change
-   - create a new password
-   - recover password
+""" + _INTENT_RULES + """
 
-3. account_unlock
-   Use when the user asks to unlock a locked account.
+""" + _OUTPUT_RULES + """
 
-   Common examples:
-   - unlock account
-   - unlock user
-   - account is locked
-   - remove account lock
-
-4. grant_access
-   Use when the user wants access, membership, a role or permission
-   added.
-
-   Common examples:
-   - grant access
-   - give access
-   - provide access
-   - add user to group
-   - assign role
-
-5. revoke_access
-   Use when the user wants access, membership, a role or permission
-   removed.
-
-   Common examples:
-   - revoke access
-   - remove access
-   - remove user from group
-   - take away permission
-   - unassign role
-
-6. failed_login_investigation
-   Use when the user asks to investigate failed logins, repeated login
-   errors, account lockout causes, suspicious sign-in attempts or login
-   failure history.
-
-   Common examples:
-   - failed login
-   - login failure
-   - investigate failed sign-ins
-   - lockout investigation
-   - investigate login
-   - why is the account repeatedly locked
-   - check suspicious sign-in attempts
-
-7. unknown
-   Use when the request does not clearly match any supported intent.
-
-RULES
-
-- Choose exactly one intent.
-- Do not invent a new intent name.
-- Do not call a tool.
-- Do not execute an IT operation.
-- Do not claim that an operation completed.
-- Confidence must be a number between 0 and 1.
-- Keep the explanation brief.
-- Return only valid JSON.
-- Do not add markdown or explanatory text outside the JSON object.
-
-User request:
-
-{user_input}
-
-Return this exact JSON structure:
-
+Respond in this JSON format:
 {{
-    "intent": "<get_user_details | password_reset | account_unlock | grant_access | revoke_access | failed_login_investigation | unknown>",
-    "confidence": <number between 0 and 1>,
-    "explanation": "<brief reason>"
+    "intent": "<one of: get_user_details, password_reset, account_unlock, grant_access, revoke_access, unknown>",
+    "confidence": 0.0,
+    "explanation": "<brief explanation>"
 }}
-""".strip()
+
+Examples:
+Request: "Please reset the password for john.doe"
+{{"intent": "password_reset", "confidence": 0.97, "explanation": "Asks to reset a password."}}
+
+Request: "remove sarah.lee's access to the finance share"
+{{"intent": "revoke_access", "confidence": 0.95, "explanation": "Asks to remove existing access."}}
+
+Request: "my laptop will not turn on"
+{{"intent": "unknown", "confidence": 0.9, "explanation": "Hardware issue, not an identity request."}}
+
+User Request: {user_input}
+
+JSON response:"""
 
 
-METADATA_EXTRACTION_PROMPT = """
-You are the metadata-extraction component of an enterprise IT
-administration platform.
+METADATA_EXTRACTION_PROMPT = """You are an IT support assistant. Extract structured information from the user request.
 
-The classified intent is:
+Identified Intent: {intent}
 
-{intent}
+""" + _METADATA_RULES + """
 
-The user request is:
+""" + _OUTPUT_RULES + """
 
-{user_input}
-
-Extract only identity and operation information explicitly available in
-the request.
-
-FIELDS
-
-1. username
-   The account login name, username, login ID, UPN local part or account
-   identifier.
-
-2. user_id
-   The Microsoft Graph object ID, directory user ID or another explicit
-   unique user ID.
-
-3. email
-   A complete email address.
-
-4. employee_number
-   An employee ID, employee number, staff ID, personnel number or emp ID.
-
-5. group_name
-   The access group, application role, security group or entitlement
-   explicitly requested for grant-access or revoke-access operations.
-
-6. time_window
-   The investigation period for failed-login or lockout analysis.
-
-IMPORTANT RULES
-
-- Extract only values explicitly present in the request.
-- Do not infer an employee number.
-- Do not infer a user ID.
-- Do not convert an ordinary display name into a username.
-- If a complete email address is explicitly present and username is not
-  separately specified, username may be the exact substring before the
-  @ symbol.
-- Example:
-  Shreesanyog.Rath@Coforge.com gives username Shreesanyog.Rath.
-- This email-to-username transformation is the only permitted
-  deterministic derivation.
-- For grant_access and revoke_access, extract group_name when available.
-- For failed_login_investigation, extract time_window when available.
-- Use JSON null when a field is absent.
-- Do not call any tool.
-- Do not execute an IT operation.
-- Return only valid JSON.
-- Do not add markdown or explanatory text.
-
-Return this exact JSON structure:
-
+Respond in this JSON format:
 {{
-    "username": "<string or null>",
-    "user_id": "<string or null>",
-    "email": "<string or null>",
-    "employee_number": "<string or null>",
-    "group_name": "<string or null>",
-    "time_window": "<string or null>",
-    "username_source": "<explicit | derived_from_email | null>"
+    "username": null,
+    "user_id": null,
+    "email": null,
+    "employee_number": null
 }}
-""".strip()
+
+Examples:
+Request: "Get details for derhant@coforge.com"
+{{"username": "derhant", "user_id": null, "email": "derhant@coforge.com", "employee_number": null}}
+
+Request: "unlock the account for john.doe, employee 44821"
+{{"username": "john.doe", "user_id": null, "email": null, "employee_number": "44821"}}
+
+Request: "please reset the password for the new joiner"
+{{"username": null, "user_id": null, "email": null, "employee_number": null}}
+
+User Request: {user_input}
+
+JSON response:"""
 
 
-UNIFIED_EXTRACTION_PROMPT = """
-You are the unified intent-classification and metadata-extraction
-component of an enterprise IT administration platform.
+UNIFIED_EXTRACTION_PROMPT = """You are an IT support assistant. Identify the intent of the user request
+and extract the user information from it, in a single response.
 
-Analyze the user request once and return both the intent and metadata.
+""" + _INTENT_RULES + """
 
-SUPPORTED INTENTS
+""" + _METADATA_RULES + """
 
-- get_user_details
-- password_reset
-- account_unlock
-- grant_access
-- revoke_access
-- failed_login_investigation
-- unknown
+""" + _OUTPUT_RULES + """
 
-INTENT RULES
-
-- "get details", "show user information", "account information",
-  "find user" and "account status" mean get_user_details.
-
-- "reset password", "forgot password", "change password", "new password"
-  and "recover password" mean password_reset.
-
-- "unlock account", "unlock user", "account locked" and "remove account
-  lock" mean account_unlock.
-
-- "grant access", "give access", "provide access", "add to group" and
-  "assign role" mean grant_access.
-
-- "revoke access", "remove access", "remove from group", "take away
-  permission" and "unassign role" mean revoke_access.
-
-- "failed login", "login failure", "failed sign-in", "lockout
-  investigation", "investigate login", "repeated lockout" and
-  "suspicious sign-in attempts" mean failed_login_investigation.
-
-- Use unknown when no supported intent clearly applies.
-
-METADATA FIELDS
-
-- username
-- user_id
-- email
-- employee_number
-- group_name
-- time_window
-- username_source
-
-METADATA RULES
-
-- Extract values only when supported by the request text.
-- Never invent or guess identity information.
-- Do not convert a person's ordinary display name into a username.
-- If email is explicitly present and username is absent, derive username
-  as the exact substring before @.
-- Example:
-  Shreesanyog.Rath@Coforge.com gives username Shreesanyog.Rath and
-  username_source derived_from_email.
-- employee_number includes values identified as employee ID, employee
-  number, staff ID or emp ID.
-- group_name is the requested group, role or entitlement for grant or
-  revoke operations.
-- time_window is the period requested for a failed-login investigation.
-- Use JSON null when information is absent.
-
-RUNTIME RESTRICTIONS
-
-- Do not call a tool.
-- Do not execute an IT operation.
-- Do not claim that an action completed.
-- Return exactly one valid JSON object.
-- Do not add markdown.
-- Do not add text before or after the JSON object.
-
-User request:
-
-{user_input}
-
-Return this exact structure:
-
+Respond in this JSON format:
 {{
-    "intent": "<get_user_details | password_reset | account_unlock | grant_access | revoke_access | failed_login_investigation | unknown>",
-    "confidence": <number between 0 and 1>,
-    "explanation": "<brief reason>",
+    "intent": "<one of: get_user_details, password_reset, account_unlock, grant_access, revoke_access, unknown>",
+    "confidence": 0.0,
+    "explanation": "<brief explanation>",
     "metadata": {{
-        "username": "<string or null>",
-        "user_id": "<string or null>",
-        "email": "<string or null>",
-        "employee_number": "<string or null>",
-        "group_name": "<string or null>",
-        "time_window": "<string or null>",
-        "username_source": "<explicit | derived_from_email | null>"
+        "username": null,
+        "user_id": null,
+        "email": null,
+        "employee_number": null
     }}
 }}
-""".strip()
+
+Examples:
+Request: "Get details for derhant@coforge.com"
+{{"intent": "get_user_details", "confidence": 0.96, "explanation": "Asks for a user profile.",
+  "metadata": {{"username": "derhant", "user_id": null, "email": "derhant@coforge.com", "employee_number": null}}}}
+
+Request: "Please reset the password for john.doe, employee 44821"
+{{"intent": "password_reset", "confidence": 0.98, "explanation": "Asks to reset a password.",
+  "metadata": {{"username": "john.doe", "user_id": null, "email": null, "employee_number": "44821"}}}}
+
+Request: "remove sarah.lee from the finance share"
+{{"intent": "revoke_access", "confidence": 0.93, "explanation": "Asks to remove existing access.",
+  "metadata": {{"username": "sarah.lee", "user_id": null, "email": null, "employee_number": null}}}}
+
+Request: "the office wifi keeps dropping"
+{{"intent": "unknown", "confidence": 0.91, "explanation": "Network issue, not an identity request.",
+  "metadata": {{"username": null, "user_id": null, "email": null, "employee_number": null}}}}
+
+User Request: {user_input}
+
+JSON response:"""
