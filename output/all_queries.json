@@ -38,5 +38,67 @@
       "message": "Intent and metadata extraction failed.",
       "error": "ConnectError"
     }
+  },
+  {
+    "recorded_at": "2026-09-04T05:08:53.211070+00:00",
+    "original_user_input": "Get user details for amit.bhagat@coforge.com",
+    "complete_user_input": "Get user details for amit.bhagat@coforge.com",
+    "request_id": "demo_0aa12dc0a3fa",
+    "correlation_id": "corr_bfc4aa07decf420e9d8b7f57d768066b",
+    "intent": "get_user_details",
+    "selected_agent": "identity_agent",
+    "selected_mcp_server": "App.mcp_servers.get_user_details_server",
+    "selected_mcp_tool": "get_user_details",
+    "selected_tool": "get_user_details_tool",
+    "response": {
+      "success": true,
+      "request_id": "demo_0aa12dc0a3fa",
+      "correlation_id": "corr_bfc4aa07decf420e9d8b7f57d768066b",
+      "user_input": "Get user details for amit.bhagat@coforge.com",
+      "intent": "get_user_details",
+      "confidence": 0.96,
+      "explanation": "Asks for a user profile.",
+      "metadata": {
+        "username": "amit.bhagat",
+        "user_id": null,
+        "email": "amit.bhagat@coforge.com",
+        "employee_number": null,
+        "group_name": null,
+        "time_window": null,
+        "username_source": "explicit"
+      },
+      "validation": {
+        "is_valid": true,
+        "missing_fields": [],
+        "derived_fields": [],
+        "message": "Metadata is valid."
+      },
+      "selected_agent": "identity_agent",
+      "selected_mcp_server": "App.mcp_servers.get_user_details_server",
+      "selected_mcp_tool": "get_user_details",
+      "selected_tool": "get_user_details_tool",
+      "tool_result": {
+        "success": true,
+        "tool_name": "get_user_details_tool",
+        "status": "completed",
+        "operation_id": "op_125ec4e296504d1bbd12e48416fc6c8b",
+        "message": "User details retrieved successfully for Amit.Bhagat@Coforge.com.",
+        "result": {
+          "id": "bffa5400-3970-45f1-b022-13c39d0c0bd7",
+          "displayName": "Amit Pradeep Bhagat",
+          "userPrincipalName": "Amit.Bhagat@Coforge.com",
+          "accountEnabled": true,
+          "onPremisesSyncEnabled": true,
+          "userType": "Member",
+          "mail": "Amit.Bhagat@coforge.com"
+        },
+        "error": null,
+        "api_integration_pending": false
+      },
+      "clarification_required": false,
+      "clarification_question": null,
+      "message": "User details retrieved successfully for Amit.Bhagat@Coforge.com.",
+      "error": null
+    }
   }
 ]
