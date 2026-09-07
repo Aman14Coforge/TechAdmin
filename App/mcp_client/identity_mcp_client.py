@@ -19,23 +19,50 @@ class MCPToolCallResult(BaseModel):
 
 class IdentityMCPClient:
     SERVER_MODULES = {
-        "password_reset": "App.mcp_servers.password_reset_server",
-        "get_user_details": "App.mcp_servers.get_user_details_server",
-        "account_unlock": "App.mcp_servers.account_unlock_server",
-        "grant_access": "App.mcp_servers.access_management_server",
-        "revoke_access": "App.mcp_servers.access_management_server",
-        "failed_login_investigation": "App.mcp_servers.failed_login_server",
-        "create_user": "App.mcp_servers.directory_operations_server",
-        "delete_user": "App.mcp_servers.directory_operations_server",
-        "create_group": "App.mcp_servers.directory_operations_server",
-        "create_vm": "App.mcp_servers.directory_operations_server",
+        "password_reset":
+            "App.mcp_servers.password_reset_server",
+
+        "get_user_details":
+            "App.mcp_servers.get_user_details_server",
+
+        "account_unlock":
+            "App.mcp_servers.account_unlock_server",
+
+        "grant_access":
+            "App.mcp_servers.access_management_server",
+
+        "revoke_access":
+            "App.mcp_servers.access_management_server",
+
+        "failed_login_investigation":
+            "App.mcp_servers.failed_login_server",
+
+        "create_user":
+            "App.mcp_servers.directory_operations_server",
+
+        "delete_user":
+            "App.mcp_servers.directory_operations_server",
+
+        "create_group":
+            "App.mcp_servers.directory_operations_server",
+
+        "create_vm":
+            "App.mcp_servers.directory_operations_server",
     }
     TOOL_NAMES = {
-        "password_reset": "reset_password", "get_user_details": "get_user_details",
-        "account_unlock": "unlock_account", "grant_access": "manage_access",
-        "revoke_access": "manage_access", "failed_login_investigation": "investigate_failed_login",
-        "create_user": "create_user", "delete_user": "delete_user",
-        "create_group": "create_group", "create_vm": "create_vm",
+        "password_reset": "reset_password",
+        "get_user_details": "get_user_details",
+        "account_unlock": "unlock_account",
+        "grant_access": "manage_access",
+        "revoke_access": "manage_access",
+
+        "failed_login_investigation":
+            "investigate_failed_login",
+
+        "create_user": "create_user",
+        "delete_user": "delete_user",
+        "create_group": "create_group",
+        "create_vm": "create_vm",
     }
     def __init__(self, project_root: Path | None = None) -> None:
         self.project_root = project_root or Path(__file__).resolve().parents[2]

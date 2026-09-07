@@ -16,11 +16,16 @@ class IntentType(str, Enum):
     GRANT_ACCESS = "grant_access"
     REVOKE_ACCESS = "revoke_access"
     GET_USER_DETAILS = "get_user_details"
-    FAILED_LOGIN_INVESTIGATION = "failed_login_investigation"
+
+    FAILED_LOGIN_INVESTIGATION = (
+        "failed_login_investigation"
+    )
+
     CREATE_USER = "create_user"
     DELETE_USER = "delete_user"
     CREATE_GROUP = "create_group"
     CREATE_VM = "create_vm"
+
     UNKNOWN = "unknown"
 
 
@@ -29,12 +34,15 @@ class ToolName(str, Enum):
     UNLOCK_ACCOUNT = "unlock_account_tool"
     MANAGE_ACCESS = "manage_access_tool"
     GET_USER_DETAILS = "get_user_details_tool"
-    INVESTIGATE_FAILED_LOGIN = "investigate_failed_login_tool"
+
+    INVESTIGATE_FAILED_LOGIN = (
+        "investigate_failed_login_tool"
+    )
+
     CREATE_USER = "create_user_tool"
     DELETE_USER = "delete_user_tool"
     CREATE_GROUP = "create_group_tool"
     CREATE_VM = "create_vm_tool"
-    DIRECTORY_OPERATION = "directory_operation_tool"
 
 
 class ToolStatus(str, Enum):
@@ -45,33 +53,31 @@ class ToolStatus(str, Enum):
 
 
 class IdentityMetadata(StrictModel):
-    username: str | None = None
-    user_id: str | None = None
-    email: str | None = None
-    employee_number: str | None = None
-    group_name: str | None = None
-    time_window: str | None = None
-    username_source: str | None = None
     first_name: str | None = None
     last_name: str | None = None
     department: str | None = None
     target_ou: str | None = None
     description: str | None = None
+
     initial_password: str | None = None
+
     target_host: str | None = None
     vm_name: str | None = None
     cpu_count: int | None = None
     ram_gb: int | None = None
     vswitch_name: str | None = None
+
     ip_address: str | None = None
     subnet: str | None = None
     gateway: str | None = None
     dns: str | None = None
     hostname: str | None = None
+
     domain: str | None = None
     domain_user: str | None = None
     domain_password: str | None = None
     admin_password: str | None = None
+
     approval_granted: bool = False
 
     @field_validator("username", "user_id", "email", "employee_number", "group_name", "time_window", "username_source", "first_name", "last_name", "department", "target_ou", "description", "initial_password", "target_host", "vm_name", "vswitch_name", "ip_address", "subnet", "gateway", "dns", "hostname", "domain", "domain_user", "domain_password", "admin_password", mode="before")

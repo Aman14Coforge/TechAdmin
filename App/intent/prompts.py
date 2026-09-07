@@ -1,208 +1,395 @@
-# """
-# LLM Prompts Module
-# Author: Amit Bhagat
-# Purpose: Store and manage prompts for intent classification and metadata extraction
-# """
-
-# # Intent Classification Prompt
-# INTENT_CLASSIFICATION_PROMPT = """You are an IT support assistant. Analyze the user request and identify the intent.
-
-# IMPORTANT: Be careful about keywords:
-# - "get details", "show info", "user information", "account info" = get_user_details
-# - "reset password", "change password", "new password" = password_reset  
-# - "unlock account", "unlock user" = account_unlock
-# - "grant access", "give access", "provide access" = grant_access
-# - "revoke access", "remove access" = revoke_access
-
-# User Request: {user_input}
-
-# Classify the intent as ONE of: get_user_details, password_reset, account_unlock, grant_access, revoke_access
-
-# Respond in VALID JSON format ONLY:
-# {{
-#     "intent": "<identified_intent>",
-#     "confidence": <confidence_score_0_to_1>,
-#     "explanation": "<brief_explanation>"
-# }}
-
-# Only respond with valid JSON, no additional text."""
-
-# # Metadata Extraction Prompt
-# METADATA_EXTRACTION_PROMPT = """You are an IT support assistant. Extract structured information from the user request.
-
-# User Request: {user_input}
-# Identified Intent: {intent}
-
-# Extract the following information if available in the request:
-# - username: User's username (AD format: firstname.lastname or email prefix)
-# - user_id: User's unique ID or Employee ID
-# - email: User's email address (format: user@domain.com)
-# - employee_number: Employee number if mentioned
-
-# IMPORTANT: 
-# - Extract email if it's in the request (format: something@domain.com)
-# - Extract username/first.last if it's in the request
-# - If email is present, extract the username part before @
-# - Set to null if not found in the request text
-
-# Respond in VALID JSON format ONLY:
-# {{
-#     "username": "<username_or_null>",
-#     "user_id": "<user_id_or_null>",
-#     "email": "<email_or_null>",
-#     "employee_number": "<employee_number_or_null>"
-# }}
-
-# Only respond with valid JSON, no additional text."""
-
-# # TODO: Add more prompts as needed for other intents and operations
-
-
 """
 LLM Prompts Module
-Author: Amit Bhagat
-Purpose: Store and manage prompts for intent classification and metadata extraction.
 
-Three prompts are defined:
-  - INTENT_CLASSIFICATION_PROMPT : intent only
-  - METADATA_EXTRACTION_PROMPT   : metadata only, given a known intent
-  - UNIFIED_EXTRACTION_PROMPT    : both in a single call
+Purpose:
+    Store the controlled prompts used by TechAdmin for intent
+    classification and metadata extraction.
 
-The intent list and the extraction rules are kept as shared blocks so that a rule
-only has to be edited in one place.
+Security:
+    Passwords and authorization approval must never be extracted from
+    natural-language requests. Those fields must be supplied through
+    secure structured UI controls.
 """
 
-# Shared intent definitions used by the classification and unified prompts.
-_INTENT_RULES = """Supported intents:
-- get_user_details : "get details", "show info", "user information", "account info", "look up user"
-- password_reset   : "reset password", "change password", "new password", "forgot password"
-- account_unlock   : "unlock account", "unlock user", "account is locked", "locked out"
-- grant_access     : "grant access", "give access", "provide access", "add to group"
-- revoke_access    : "revoke access", "remove access", "take away access", "remove from group"
-- unknown          : anything else, such as hardware faults, network issues or software installs
+
+_INTENT_RULES = """
+Supported intents:
+
+1. get_user_details
+   Retrieve, inspect, show, find or look up a user account.
+
+2. password_reset
+   Reset, change, replace or recover a password.
+
+3. account_unlock
+   Unlock a locked Active Directory account.
+
+4. grant_access
+   Add a user to a group or grant access.
+
+5. revoke_access
+   Remove a user from a group or revoke access.
+
+6. failed_login_investigation
+   Investigate failed logins, authentication failures or account
+   lockouts.
+
+7. create_user
+   Create, provision or onboard a new Active Directory user.
+
+8. delete_user
+   Delete, remove or deprovision an Active Directory user.
+
+9. create_group
+   Create a new Active Directory security group.
+
+10. create_vm
+    Create or provision a new Hyper-V virtual machine.
+
+11. unknown
+    The request does not match a supported TechAdmin operation.
+
+Important classification rules:
+
+- "Remove user from group" means revoke_access.
+- "Delete user" or "delete account" means delete_user.
+- "Add user to group" means grant_access.
+- "Create group" means create_group, not grant_access.
+- "Create VM", "new VM" and "provision virtual machine" mean create_vm.
+- A request that only asks to see account information means
+  get_user_details.
+- Hardware, network, printer and software issues are unknown unless a
+  corresponding supported intent is added later.
+""".strip()
+
+
+_METADATA_RULES = """
+Extract only fields explicitly stated in the request.
+
+Identity fields:
+
+- username
+- user_id
+- email
+- employee_number
+- group_name
+- time_window
+- username_source
+
+User-provisioning fields:
+
+- first_name
+- last_name
+- department
+- target_ou
+
+Group-provisioning fields:
+
+- description
+
+Virtual-machine fields:
+
+- target_host
+- vm_name
+- cpu_count
+- ram_gb
+- vswitch_name
+- ip_address
+- subnet
+- gateway
+- dns
+- hostname
+- domain
+- domain_user
 
 Rules:
-- "remove access" and "revoke" are always revoke_access, never grant_access.
-- A request that only asks to SEE information is get_user_details, even if it mentions
-  a password or a locked account.
-- If the request does not match any supported intent, answer "unknown"."""
 
-# Shared metadata rules used by the extraction and unified prompts.
-_METADATA_RULES = """Fields to extract:
-- username        : AD username, usually first.last. If only an email is given, use the part before the @.
-- user_id         : user or employee ID, only if explicitly stated
-- email           : full address in the form something@domain.com
-- employee_number : employee number, only if explicitly stated
-
-Rules:
-- Copy values exactly as they appear in the request. Do not guess or invent them.
-- If a field is not present in the request, use the JSON value null (not the text "null")."""
-
-# Shared output rules.
-_OUTPUT_RULES = """Output rules:
-- Respond with a single JSON object and nothing else.
-- No markdown, no explanation before or after, no <think> block.
-- confidence must be a number between 0 and 1, not a string."""
+- If a complete email address is supplied and username is absent,
+  username may be the exact substring before @.
+- Set username_source to derived_from_email only when that deterministic
+  transformation is used.
+- Set username_source to explicit when username is directly supplied.
+- Do not convert an ordinary display name into a username.
+- Do not invent values.
+- Do not extract any password.
+- Do not extract initial_password.
+- Do not extract admin_password.
+- Do not extract domain_password.
+- Do not infer authorization approval.
+- approval_granted must always be false in LLM output.
+- cpu_count and ram_gb must be JSON integers when present.
+- Use JSON null for every missing field.
+""".strip()
 
 
-INTENT_CLASSIFICATION_PROMPT = """You are an IT support assistant. Identify the intent of the user request.
+_OUTPUT_RULES = """
+Output rules:
 
-""" + _INTENT_RULES + """
+- Return exactly one valid JSON object.
+- Do not add Markdown.
+- Do not add a think block.
+- Do not add text before or after the JSON.
+- confidence must be a JSON number from 0 to 1.
+""".strip()
 
-""" + _OUTPUT_RULES + """
 
-Respond in this JSON format:
+INTENT_CLASSIFICATION_PROMPT = (
+    """
+You are the intent-classification component of TechAdmin.
+
+"""
+    + _INTENT_RULES
+    + """
+
+"""
+    + _OUTPUT_RULES
+    + """
+
+Return:
+
 {{
-    "intent": "<one of: get_user_details, password_reset, account_unlock, grant_access, revoke_access, unknown>",
+    "intent": "<supported intent>",
     "confidence": 0.0,
-    "explanation": "<brief explanation>"
+    "explanation": "<brief reason>"
 }}
 
-Examples:
-Request: "Please reset the password for john.doe"
-{{"intent": "password_reset", "confidence": 0.97, "explanation": "Asks to reset a password."}}
+User request:
 
-Request: "remove sarah.lee's access to the finance share"
-{{"intent": "revoke_access", "confidence": 0.95, "explanation": "Asks to remove existing access."}}
+{user_input}
 
-Request: "my laptop will not turn on"
-{{"intent": "unknown", "confidence": 0.9, "explanation": "Hardware issue, not an identity request."}}
-
-User Request: {user_input}
-
-JSON response:"""
+JSON response:
+"""
+).strip()
 
 
-METADATA_EXTRACTION_PROMPT = """You are an IT support assistant. Extract structured information from the user request.
+METADATA_EXTRACTION_PROMPT = (
+    """
+You are the metadata-extraction component of TechAdmin.
 
-Identified Intent: {intent}
+Classified intent:
 
-""" + _METADATA_RULES + """
+{intent}
 
-""" + _OUTPUT_RULES + """
+"""
+    + _METADATA_RULES
+    + """
 
-Respond in this JSON format:
+"""
+    + _OUTPUT_RULES
+    + """
+
+Return:
+
 {{
     "username": null,
     "user_id": null,
     "email": null,
-    "employee_number": null
+    "employee_number": null,
+    "group_name": null,
+    "time_window": null,
+    "username_source": null,
+    "first_name": null,
+    "last_name": null,
+    "department": null,
+    "target_ou": null,
+    "description": null,
+    "target_host": null,
+    "vm_name": null,
+    "cpu_count": null,
+    "ram_gb": null,
+    "vswitch_name": null,
+    "ip_address": null,
+    "subnet": null,
+    "gateway": null,
+    "dns": null,
+    "hostname": null,
+    "domain": null,
+    "domain_user": null,
+    "approval_granted": false
 }}
 
-Examples:
-Request: "Get details for derhant@coforge.com"
-{{"username": "derhant", "user_id": null, "email": "derhant@coforge.com", "employee_number": null}}
+User request:
 
-Request: "unlock the account for john.doe, employee 44821"
-{{"username": "john.doe", "user_id": null, "email": null, "employee_number": "44821"}}
+{user_input}
 
-Request: "please reset the password for the new joiner"
-{{"username": null, "user_id": null, "email": null, "employee_number": null}}
-
-User Request: {user_input}
-
-JSON response:"""
+JSON response:
+"""
+).strip()
 
 
-UNIFIED_EXTRACTION_PROMPT = """You are an IT support assistant. Identify the intent of the user request
-and extract the user information from it, in a single response.
+UNIFIED_EXTRACTION_PROMPT = (
+    """
+You are the unified intent-classification and metadata-extraction
+component of TechAdmin.
 
-""" + _INTENT_RULES + """
+Classify the request and extract the available metadata in one response.
 
-""" + _METADATA_RULES + """
+"""
+    + _INTENT_RULES
+    + """
 
-""" + _OUTPUT_RULES + """
+"""
+    + _METADATA_RULES
+    + """
 
-Respond in this JSON format:
+"""
+    + _OUTPUT_RULES
+    + """
+
+Return exactly this structure:
+
 {{
-    "intent": "<one of: get_user_details, password_reset, account_unlock, grant_access, revoke_access, unknown>",
+    "intent": "<supported intent>",
     "confidence": 0.0,
-    "explanation": "<brief explanation>",
+    "explanation": "<brief reason>",
     "metadata": {{
         "username": null,
         "user_id": null,
         "email": null,
-        "employee_number": null
+        "employee_number": null,
+        "group_name": null,
+        "time_window": null,
+        "username_source": null,
+        "first_name": null,
+        "last_name": null,
+        "department": null,
+        "target_ou": null,
+        "description": null,
+        "target_host": null,
+        "vm_name": null,
+        "cpu_count": null,
+        "ram_gb": null,
+        "vswitch_name": null,
+        "ip_address": null,
+        "subnet": null,
+        "gateway": null,
+        "dns": null,
+        "hostname": null,
+        "domain": null,
+        "domain_user": null,
+        "approval_granted": false
     }}
 }}
 
 Examples:
-Request: "Get details for derhant@coforge.com"
-{{"intent": "get_user_details", "confidence": 0.96, "explanation": "Asks for a user profile.",
-  "metadata": {{"username": "derhant", "user_id": null, "email": "derhant@coforge.com", "employee_number": null}}}}
 
-Request: "Please reset the password for john.doe, employee 44821"
-{{"intent": "password_reset", "confidence": 0.98, "explanation": "Asks to reset a password.",
-  "metadata": {{"username": "john.doe", "user_id": null, "email": null, "employee_number": "44821"}}}}
+Request:
+Create a security group named App-Support with description Application
+support team
 
-Request: "remove sarah.lee from the finance share"
-{{"intent": "revoke_access", "confidence": 0.93, "explanation": "Asks to remove existing access.",
-  "metadata": {{"username": "sarah.lee", "user_id": null, "email": null, "employee_number": null}}}}
+Response:
+{{
+    "intent": "create_group",
+    "confidence": 0.98,
+    "explanation": "Requests creation of an AD security group.",
+    "metadata": {{
+        "username": null,
+        "user_id": null,
+        "email": null,
+        "employee_number": null,
+        "group_name": "App-Support",
+        "time_window": null,
+        "username_source": null,
+        "first_name": null,
+        "last_name": null,
+        "department": null,
+        "target_ou": null,
+        "description": "Application support team",
+        "target_host": null,
+        "vm_name": null,
+        "cpu_count": null,
+        "ram_gb": null,
+        "vswitch_name": null,
+        "ip_address": null,
+        "subnet": null,
+        "gateway": null,
+        "dns": null,
+        "hostname": null,
+        "domain": null,
+        "domain_user": null,
+        "approval_granted": false
+    }}
+}}
 
-Request: "the office wifi keeps dropping"
-{{"intent": "unknown", "confidence": 0.91, "explanation": "Network issue, not an identity request.",
-  "metadata": {{"username": null, "user_id": null, "email": null, "employee_number": null}}}}
+Request:
+Add alex.lee to VPN-Users
 
-User Request: {user_input}
+Response:
+{{
+    "intent": "grant_access",
+    "confidence": 0.98,
+    "explanation": "Requests adding a user to an AD group.",
+    "metadata": {{
+        "username": "alex.lee",
+        "user_id": null,
+        "email": null,
+        "employee_number": null,
+        "group_name": "VPN-Users",
+        "time_window": null,
+        "username_source": "explicit",
+        "first_name": null,
+        "last_name": null,
+        "department": null,
+        "target_ou": null,
+        "description": null,
+        "target_host": null,
+        "vm_name": null,
+        "cpu_count": null,
+        "ram_gb": null,
+        "vswitch_name": null,
+        "ip_address": null,
+        "subnet": null,
+        "gateway": null,
+        "dns": null,
+        "hostname": null,
+        "domain": null,
+        "domain_user": null,
+        "approval_granted": false
+    }}
+}}
 
-JSON response:"""
+Request:
+Provision VM APP-SRV-01 on HVHOST01 with 4 CPUs, 16 GB RAM,
+virtual switch ProductionSwitch and hostname APP-SRV-01
+
+Response:
+{{
+    "intent": "create_vm",
+    "confidence": 0.98,
+    "explanation": "Requests provisioning of a Hyper-V VM.",
+    "metadata": {{
+        "username": null,
+        "user_id": null,
+        "email": null,
+        "employee_number": null,
+        "group_name": null,
+        "time_window": null,
+        "username_source": null,
+        "first_name": null,
+        "last_name": null,
+        "department": null,
+        "target_ou": null,
+        "description": null,
+        "target_host": "HVHOST01",
+        "vm_name": "APP-SRV-01",
+        "cpu_count": 4,
+        "ram_gb": 16,
+        "vswitch_name": "ProductionSwitch",
+        "ip_address": null,
+        "subnet": null,
+        "gateway": null,
+        "dns": null,
+        "hostname": "APP-SRV-01",
+        "domain": null,
+        "domain_user": null,
+        "approval_granted": false
+    }}
+}}
+
+User request:
+
+{user_input}
+
+JSON response:
+"""
+).strip()
