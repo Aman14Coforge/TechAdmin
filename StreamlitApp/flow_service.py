@@ -1,143 +1,428 @@
 """
 Streamlit Flow Service
-Purpose: Thin service layer between the Streamlit UI and the existing TechAdmin flow.
 
-This module contains NO business logic of its own. It reuses the same
-DemoFlow class that `python Scripts/demo_flow.py` runs, so the UI and the
-terminal always behave identically.
+Purpose:
+    Provide a controlled service layer between the Streamlit dashboard
+    and the existing TechAdmin DemoFlow.
+
+The Streamlit UI and terminal workflow use the same DemoFlow
+implementation.
 """
 
 from __future__ import annotations
 
+import copy
 import sys
 import uuid
 from pathlib import Path
 from typing import Any, Dict
 
-# ---------------------------------------------------------------------------
-# Project bootstrap
-# Streamlit is started from the project root, but we add the paths explicitly
-# so the app also works if it is launched from somewhere else.
-# ---------------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS_DIR = PROJECT_ROOT / "Scripts"
+# ---------------------------------------------------------------------
+# Project path bootstrap
+# ---------------------------------------------------------------------
 
-for path in (PROJECT_ROOT, SCRIPTS_DIR):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+PROJECT_ROOT = (
+    Path(__file__)
+    .resolve()
+    .parent
+    .parent
+)
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(
+        0,
+        str(PROJECT_ROOT),
+    )
+
+# ---------------------------------------------------------------------
+# Environment loading
+# ---------------------------------------------------------------------
 
 from dotenv import load_dotenv  # noqa: E402
 
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(
+    PROJECT_ROOT / ".env"
+)
+
+# ---------------------------------------------------------------------
+# Application imports
+# ---------------------------------------------------------------------
 
 from loguru import logger  # noqa: E402
 
 from App.utils.config import Config  # noqa: E402
-
-# Scripts/ is not a package, which is why SCRIPTS_DIR was added to sys.path above.
-# Importing DemoFlow (instead of copying its logic) keeps the UI in step with
-# the terminal demo automatically.
-from demo_flow import DemoFlow  # noqa: E402
+from Scripts.demo_flow import DemoFlow  # noqa: E402
 
 
-LOG_FILE = PROJECT_ROOT / "logs" / "techadmin.log"
+LOG_FILE = (
+    PROJECT_ROOT
+    / "logs"
+    / "techadmin.log"
+)
 
 
 class FlowService:
-    """Runs a user query through the complete TechAdmin workflow."""
+    """
+    Run user requests through the complete TechAdmin workflow.
 
-    def __init__(self) -> None:
-        # Building DemoFlow creates the Ollama client and the Graph client,
-        # so this should happen once per session, not once per query.
+    The pipeline includes:
+
+    1. Unified intent and metadata extraction
+    2. Agent routing
+    3. Identity Agent validation
+    4. MCP server and tool selection
+    5. Microsoft Graph or PowerShell execution
+    6. Structured response formatting
+    """
+
+    def __init__(
+        self,
+    ) -> None:
         self.demo = DemoFlow()
 
-    def run_query(self, user_query: str) -> Dict[str, Any]:
-        """
-        Run one user query through the full pipeline.
+        logger.info(
+            "FLOW_SERVICE_INITIALIZED | "
+            "demo_flow_class={}",
+            type(self.demo).__name__,
+        )
 
-        The pipeline is: unified intent + metadata extraction with Ollama,
-        then routing, then the Identity Agent, then response formatting.
-        This is exactly what `python Scripts/demo_flow.py` does.
+    @staticmethod
+    def _extract_dashboard_password(
+        response: Dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        """
+        Extract a generated temporary password from a workflow response.
+
+        The password is removed from the normal response before that
+        response is stored in conversation history or displayed in the
+        raw-response section.
+
+        The password is returned separately for display in the current
+        Streamlit session.
+        """
+
+        tool_result = response.get(
+            "tool_result"
+        )
+
+        if not isinstance(
+            tool_result,
+            dict,
+        ):
+            return None
+
+        result = tool_result.get(
+            "result"
+        )
+
+        if not isinstance(
+            result,
+            dict,
+        ):
+            return None
+
+        temporary_password = result.pop(
+            "temporary_password",
+            None,
+        )
+
+        if (
+            not isinstance(
+                temporary_password,
+                str,
+            )
+            or not temporary_password
+        ):
+            return None
+
+        result[
+            "temporary_password_redacted"
+        ] = True
+
+        result[
+            "temporary_password_displayed_on_dashboard"
+        ] = True
+
+        metadata = response.get(
+            "metadata"
+        )
+
+        if not isinstance(
+            metadata,
+            dict,
+        ):
+            metadata = {}
+
+        user_identifier = (
+            result.get(
+                "user_principal_name"
+            )
+            or result.get(
+                "user_name"
+            )
+            or metadata.get(
+                "email"
+            )
+            or metadata.get(
+                "username"
+            )
+            or "Unknown user"
+        )
+
+        return {
+            "password":
+                temporary_password,
+
+            "backend":
+                result.get(
+                    "backend"
+                ),
+
+            "user":
+                user_identifier,
+
+            "operation_id":
+                tool_result.get(
+                    "operation_id"
+                ),
+        }
+
+    def run_query(
+        self,
+        user_query: str,
+    ) -> Dict[str, Any]:
+        """
+        Run one user query through DemoFlow.
 
         Args:
-            user_query: The user's request in plain English, for example
-                "Get details for amit.bhagat@coforge.com" or
-                "Reset password for aman.gupta"
+            user_query:
+                User request written in plain English.
 
         Returns:
-            The response dict produced by DemoFlow.execute_flow(), containing
-            success, request_id, intent, message, metadata, result and error.
-        """
-        user_query = (user_query or "").strip()
-        request_id = f"ui_{uuid.uuid4().hex[:8]}"
+            Structured TechAdmin workflow response.
 
-        if not user_query:
+            A generated temporary password, when present, is returned in
+            the transient `_dashboard_secret` key. Streamlit must remove
+            this key before adding the response to conversation history.
+        """
+
+        normalized_query = (
+            user_query.strip()
+            if isinstance(
+                user_query,
+                str,
+            )
+            else ""
+        )
+
+        request_id = (
+            f"ui_{uuid.uuid4().hex[:8]}"
+        )
+
+        if not normalized_query:
             return {
                 "success": False,
                 "request_id": request_id,
                 "intent": None,
-                "message": "Please enter a request.",
+                "message": (
+                    "Please enter a request."
+                ),
                 "metadata": {},
                 "result": None,
                 "error": "Empty query",
             }
 
-        logger.info(f"UI query | request_id={request_id} | query={user_query}")
+        logger.info(
+            "UI_QUERY_RECEIVED | "
+            "request_id={} | "
+            "query_length={}",
+            request_id,
+            len(normalized_query),
+        )
 
         try:
-            return self.demo.execute_flow(user_query, request_id=request_id)
+            workflow_response = (
+                self.demo.execute_flow(
+                    normalized_query,
+                    request_id=request_id,
+                )
+            )
+
+            if not isinstance(
+                workflow_response,
+                dict,
+            ):
+                raise TypeError(
+                    "DemoFlow.execute_flow() returned "
+                    "a non-dictionary response."
+                )
+
+            # Work on a separate response dictionary so the password can
+            # be removed before Streamlit stores or downloads it.
+            safe_response = copy.deepcopy(
+                workflow_response
+            )
+
+            dashboard_secret = (
+                self._extract_dashboard_password(
+                    safe_response
+                )
+            )
+
+            if dashboard_secret:
+                safe_response[
+                    "_dashboard_secret"
+                ] = dashboard_secret
+
+            logger.info(
+                "UI_QUERY_COMPLETED | "
+                "request_id={} | "
+                "success={} | "
+                "intent={} | "
+                "dashboard_secret_present={}",
+                request_id,
+                safe_response.get(
+                    "success"
+                ),
+                safe_response.get(
+                    "intent"
+                ),
+                dashboard_secret is not None,
+            )
+
+            return safe_response
+
         except Exception as exc:
-            # DemoFlow already handles its own errors, so reaching here means
-            # something unexpected happened. Show it rather than a blank screen.
-            logger.error(f"UI query failed: {exc}", exc_info=True)
+            logger.exception(
+                "UI_QUERY_FAILED | "
+                "request_id={} | "
+                "error_type={}",
+                request_id,
+                type(exc).__name__,
+            )
+
             return {
                 "success": False,
                 "request_id": request_id,
                 "intent": None,
-                "message": "An unexpected error occurred while processing the request.",
+                "message": (
+                    "An unexpected error occurred "
+                    "while processing the request."
+                ),
                 "metadata": {},
                 "result": None,
-                "error": str(exc),
+                "error": type(exc).__name__,
             }
 
 
-# ---------------------------------------------------------------------------
-# Environment helpers, used by the sidebar
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Environment helpers used by the Streamlit sidebar
+# ---------------------------------------------------------------------
+
+
 def get_config_status() -> Dict[str, Any]:
-    """Report which settings are present, without revealing any secret values."""
+    """
+    Report configuration availability without exposing credentials.
+    """
+
     return {
-        "ollama_host": Config.OLLAMA_HOST,
-        "model_name": Config.MODEL_NAME,
-        "graph_client_id": bool(Config.GRAPH_CLIENT_ID),
-        "graph_client_secret": bool(Config.GRAPH_CLIENT_SECRET),
-        "graph_tenant_id": bool(Config.GRAPH_TENANT_ID),
-        "config_valid": Config.validate(),
+        "ollama_host":
+            Config.OLLAMA_HOST,
+
+        "model_name":
+            Config.MODEL_NAME,
+
+        "graph_client_id":
+            bool(
+                Config.GRAPH_CLIENT_ID
+            ),
+
+        "graph_client_secret":
+            bool(
+                Config.GRAPH_CLIENT_SECRET
+            ),
+
+        "graph_tenant_id":
+            bool(
+                Config.GRAPH_TENANT_ID
+            ),
+
+        "config_valid":
+            Config.validate(),
     }
 
 
-def check_ollama() -> tuple[bool, str]:
+def check_ollama() -> tuple[
+    bool,
+    str,
+]:
     """
-    Check that the Ollama server is reachable and that the model is present.
+    Check the Ollama server and configured model.
+    """
 
-    Returns:
-        Tuple of (is_ok, message).
-    """
     import requests
 
     try:
-        response = requests.get(f"{Config.OLLAMA_HOST}/api/tags", timeout=5)
+        response = requests.get(
+            (
+                f"{Config.OLLAMA_HOST}"
+                "/api/tags"
+            ),
+            timeout=5,
+        )
+
         response.raise_for_status()
 
-        models = [m.get("name", "") for m in response.json().get("models", [])]
+        models = [
+            model.get(
+                "name",
+                "",
+            )
+            for model
+            in response.json().get(
+                "models",
+                [],
+            )
+        ]
 
-        if any(m.startswith(Config.MODEL_NAME.split(":")[0]) for m in models):
-            return True, f"Connected. Model '{Config.MODEL_NAME}' is available."
+        model_prefix = (
+            Config.MODEL_NAME.split(
+                ":",
+                maxsplit=1,
+            )[0]
+        )
 
-        return False, (
-            f"Ollama is running, but '{Config.MODEL_NAME}' was not found. "
-            f"Available: {', '.join(models) or 'none'}"
+        if any(
+            model_name.startswith(
+                model_prefix
+            )
+            for model_name in models
+        ):
+            return (
+                True,
+                (
+                    "Connected. Model "
+                    f"'{Config.MODEL_NAME}' "
+                    "is available."
+                ),
+            )
+
+        return (
+            False,
+            (
+                "Ollama is running, but "
+                f"'{Config.MODEL_NAME}' "
+                "was not found. Available: "
+                f"{', '.join(models) or 'none'}"
+            ),
         )
 
     except Exception as exc:
-        return False, f"Cannot reach Ollama at {Config.OLLAMA_HOST} ({exc})"
+        return (
+            False,
+            (
+                "Cannot reach Ollama at "
+                f"{Config.OLLAMA_HOST} "
+                f"({type(exc).__name__})"
+            ),
+        )
