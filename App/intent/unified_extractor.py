@@ -95,6 +95,25 @@ class UnifiedIntentMetadataExtractor:
         r"\bmicrosoft\s+graph\s+api\b",
     )
 
+    DETERMINISTIC_INTENT_PATTERNS: dict[IntentType, tuple[str, ...]] = {
+        IntentType.GET_USER_DETAILS: (
+            r"\bget\s+(?:the\s+)?user\s+details?\b",
+            r"\bshow\s+(?:the\s+)?user\s+(?:details?|information)\b",
+            r"\blook\s+up\s+(?:the\s+)?user\b",
+            r"\bfind\s+(?:the\s+)?user\s+(?:details?|information)\b",
+        ),
+        IntentType.PASSWORD_RESET: (
+            r"\breset\s+(?:the\s+)?password\b",
+            r"\bchange\s+(?:the\s+)?password\b",
+            r"\bpassword\s+reset\b",
+        ),
+    }
+
+    DEFAULT_API_INTENTS: set[IntentType] = {
+        IntentType.GET_USER_DETAILS,
+        IntentType.PASSWORD_RESET,
+    }
+
     def __init__(
         self,
         model_name: str | None = None,
@@ -333,6 +352,35 @@ class UnifiedIntentMetadataExtractor:
 
         return None
 
+    @classmethod
+    def _detect_deterministic_intent(
+        cls,
+        user_input: str,
+    ) -> IntentType | None:
+        """Corroborate only exact, low-ambiguity supported operations."""
+
+        if not isinstance(user_input, str):
+            return None
+
+        normalized_input = " ".join(
+            user_input.strip().casefold().split()
+        )
+
+        matched_intents = [
+            intent
+            for intent, patterns in cls.DETERMINISTIC_INTENT_PATTERNS.items()
+            if any(
+                re.search(pattern, normalized_input, flags=re.IGNORECASE)
+                is not None
+                for pattern in patterns
+            )
+        ]
+
+        if len(matched_intents) == 1:
+            return matched_intents[0]
+
+        return None
+
     @staticmethod
     def _normalize_llm_backend(
         value: Any,
@@ -482,11 +530,24 @@ class UnifiedIntentMetadataExtractor:
             raw_metadata.get("execution_backend")
         )
 
+        intent_value = cls._normalize_intent(
+            raw_result.get("intent")
+        )
+        normalized_intent = IntentType(intent_value)
+
+        # For password reset and user details, API is the default only when
+        # the user did not explicitly request API or script and the LLM did
+        # not return a controlled backend.
         selected_backend = (
             explicit_backend
             if explicit_backend is not None
             else llm_backend
         )
+        if (
+            selected_backend is None
+            and normalized_intent in cls.DEFAULT_API_INTENTS
+        ):
+            selected_backend = ExecutionBackend.API
 
         normalized_metadata["execution_backend"] = (
             selected_backend.value
@@ -499,24 +560,52 @@ class UnifiedIntentMetadataExtractor:
         normalized_metadata["domain_password"] = None
         normalized_metadata["admin_password"] = None
 
-        intent_value = cls._normalize_intent(
-            raw_result.get("intent")
-        )
-
-        confidence = cls._normalize_confidence(
+        model_confidence = cls._normalize_confidence(
             raw_result.get("confidence")
         )
+        deterministic_intent = cls._detect_deterministic_intent(user_input)
+
+        # A zero/missing model confidence is repaired only when the model's
+        # controlled intent agrees with an explicit deterministic phrase.
+        # This avoids globally bypassing the confidence safety threshold.
+        if (
+            model_confidence == 0.0
+            and deterministic_intent is normalized_intent
+            and normalized_intent is not IntentType.UNKNOWN
+        ):
+            confidence = 0.99
+            confidence_source = "deterministic_corroboration"
+        else:
+            confidence = model_confidence
+            confidence_source = "model"
 
         explanation = raw_result.get("explanation")
-        if not isinstance(explanation, str) or not explanation.strip():
-            explanation = "No explanation was supplied by the model."
+        if not isinstance(explanation, str) or not explanation.strip() or explanation.strip().casefold() == "none":
+            explanation = (
+                f"Explicit request classified as {normalized_intent.value}."
+                if deterministic_intent is normalized_intent
+                else "No explanation was supplied by the model."
+            )
 
         logger.info(
             "EXECUTION_BACKEND_RESOLVED | explicit_backend={} | "
-            "llm_backend={} | selected_backend={}",
+            "llm_backend={} | selected_backend={} | default_api_applied={}",
             explicit_backend.value if explicit_backend else None,
             llm_backend.value if llm_backend else None,
             selected_backend.value if selected_backend else None,
+            (
+                explicit_backend is None
+                and llm_backend is None
+                and normalized_intent in cls.DEFAULT_API_INTENTS
+            ),
+        )
+        logger.info(
+            "INTENT_CONFIDENCE_RESOLVED | model_confidence={} | "
+            "deterministic_intent={} | final_confidence={} | source={}",
+            model_confidence,
+            deterministic_intent.value if deterministic_intent else None,
+            confidence,
+            confidence_source,
         )
 
         return {
