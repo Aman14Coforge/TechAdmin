@@ -34,3 +34,5 @@ python-multipart
 
 # Model Context Protocol
 mcp[cli]>=2.0,<3.0
+
+streamlit
