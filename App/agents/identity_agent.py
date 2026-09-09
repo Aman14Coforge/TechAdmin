@@ -34,12 +34,14 @@ from App.mcp_client.identity_mcp_client import (
 )
 from App.workflow.state import (
     AgentExecutionResult,
+    ExecutionBackend,
     IdentityMetadata,
     IntentType,
     MetadataValidationResult,
     ToolName,
     ToolResult,
 )
+
 
 
 class IdentityAgent:
@@ -77,7 +79,8 @@ class IdentityAgent:
     ] = {
         # Email is enough because username can be derived from email.
         IntentType.PASSWORD_RESET: (
-            "email",
+            "username",
+            "execution_backend",
         ),
 
         # The PowerShell unlock script needs only UserName.
@@ -100,6 +103,7 @@ class IdentityAgent:
 
         IntentType.GET_USER_DETAILS: (
             "username",
+            "execution_backend",
         ),
 
         IntentType.FAILED_LOGIN_INVESTIGATION: (
@@ -195,6 +199,9 @@ class IdentityAgent:
         "employee_number": "employee number",
         "group_name": "group name",
         "time_window": "time window",
+        "execution_backend": (
+            "execution method, either API or script"
+        ),
         "first_name": "first name",
         "last_name": "last name",
         "department": "department",
@@ -206,18 +213,14 @@ class IdentityAgent:
         "cpu_count": "CPU count",
         "ram_gb": "RAM in GB",
         "vswitch_name": "virtual switch name",
-        "ip_address": "IP address",
-        "subnet": "subnet mask",
-        "gateway": "default gateway",
-        "dns": "DNS server",
         "hostname": "hostname",
-        "domain": "domain name",
-        "domain_user": "domain service account",
-        "domain_password": "domain service-account password",
-        "admin_password": "virtual-machine administrator password",
-        "approval_granted": "explicit authorization approval",
+        "admin_password": (
+            "virtual-machine administrator password"
+        ),
+        "approval_granted": (
+            "explicit authorization approval"
+        ),
     }
-
     # Sensitive values must never be logged.
     SENSITIVE_FIELDS: set[str] = {
         "initial_password",
@@ -350,111 +353,171 @@ class IdentityAgent:
     # Metadata validation
     # -----------------------------------------------------------------
 
-    @classmethod
-    def _validate_metadata(
-        cls,
-        *,
-        intent: IntentType,
-        metadata: IdentityMetadata,
-        derived_fields: list[str],
-    ) -> MetadataValidationResult:
-        required_fields = (
-            cls.REQUIRED_FIELDS.get(
-                intent
-            )
-        )
+    # -----------------------------------------------------------------
+# Metadata validation
+# -----------------------------------------------------------------
 
-        if required_fields is None:
-            return MetadataValidationResult(
-                is_valid=False,
-                missing_fields=[],
-                derived_fields=derived_fields,
-                message=(
-                    "No Identity Agent validation "
-                    f"policy is configured for "
-                    f"intent '{intent.value}'."
-                ),
-            )
+@classmethod
+def _validate_metadata(
+    cls,
+    *,
+    intent: IntentType,
+    metadata: IdentityMetadata,
+    derived_fields: list[str],
+) -> MetadataValidationResult:
+    """
+    Validate whether the selected Identity operation has all required
+    metadata and approvals.
 
-        missing_fields: list[str] = []
+    Approval rules:
 
-        for field_name in required_fields:
-            field_value = getattr(
-                metadata,
-                field_name,
-                None,
-            )
+    - delete_user always requires explicit approval.
+    - revoke_access always requires explicit approval.
+    - password_reset requires explicit approval only when the selected
+      execution backend is PowerShell script.
+    - password_reset through Microsoft Graph API does not use the
+      PowerShell destructive-operation approval gate.
 
-            if field_value is None:
-                missing_fields.append(
-                    field_name
-                )
+    The LLM must never infer approval. The Streamlit UI or another
+    trusted caller must set metadata.approval_granted explicitly.
+    """
 
-                continue
-
-            if (
-                isinstance(field_value, str)
-                and not field_value.strip()
-            ):
-                missing_fields.append(
-                    field_name
-                )
-
-        # Boolean approval cannot be handled with the regular
-        # "is None" check because False is a valid Boolean value.
-        if (
+    required_fields = (
+        cls.REQUIRED_FIELDS.get(
             intent
-            in cls.APPROVAL_REQUIRED_INTENTS
-            and not metadata.approval_granted
-        ):
-            missing_fields.append(
-                "approval_granted"
-            )
+        )
+    )
 
-        # Validate numeric VM values.
-        if intent is IntentType.CREATE_VM:
-            if (
-                metadata.cpu_count is not None
-                and metadata.cpu_count < 1
-            ):
-                if (
-                    "cpu_count"
-                    not in missing_fields
-                ):
-                    missing_fields.append(
-                        "cpu_count"
-                    )
-
-            if (
-                metadata.ram_gb is not None
-                and metadata.ram_gb < 1
-            ):
-                if (
-                    "ram_gb"
-                    not in missing_fields
-                ):
-                    missing_fields.append(
-                        "ram_gb"
-                    )
-
-        if missing_fields:
-            return MetadataValidationResult(
-                is_valid=False,
-                missing_fields=missing_fields,
-                derived_fields=derived_fields,
-                message=(
-                    "Additional information or approval "
-                    "is required before the selected "
-                    "MCP tool can be called."
-                ),
-            )
-
+    if required_fields is None:
         return MetadataValidationResult(
-            is_valid=True,
+            is_valid=False,
             missing_fields=[],
             derived_fields=derived_fields,
-            message="Metadata is valid.",
+            message=(
+                "No Identity Agent validation "
+                f"policy is configured for "
+                f"intent '{intent.value}'."
+            ),
         )
+
+    missing_fields: list[str] = []
+
+    # -------------------------------------------------------------
+    # Validate required operation fields
+    # -------------------------------------------------------------
+
+    for field_name in required_fields:
+        field_value = getattr(
+            metadata,
+            field_name,
+            None,
+        )
+
+        if field_value is None:
+            missing_fields.append(
+                field_name
+            )
+
+            continue
+
+        if (
+            isinstance(field_value, str)
+            and not field_value.strip()
+        ):
+            missing_fields.append(
+                field_name
+            )
+
+    # -------------------------------------------------------------
+    # Approval for normally destructive operations
+    # -------------------------------------------------------------
+
+    if (
+        intent
+        in cls.APPROVAL_REQUIRED_INTENTS
+        and not metadata.approval_granted
+        and "approval_granted"
+        not in missing_fields
+    ):
+        missing_fields.append(
+            "approval_granted"
+        )
+
+    # -------------------------------------------------------------
+    # Script-based password reset approval
+    #
+    # API password reset:
+    #     approval is not added here.
+    #
+    # Script password reset:
+    #     approval is mandatory because PowerShell modifies the
+    #     account password directly in Active Directory.
+    # -------------------------------------------------------------
+
+    if (
+        intent is IntentType.PASSWORD_RESET
+        and metadata.execution_backend
+        is ExecutionBackend.SCRIPT
+        and not metadata.approval_granted
+        and "approval_granted"
+        not in missing_fields
+    ):
+        missing_fields.append(
+            "approval_granted"
+        )
+
+    # -------------------------------------------------------------
+    # Validate numeric VM values
+    # -------------------------------------------------------------
+
+    if intent is IntentType.CREATE_VM:
+        if (
+            metadata.cpu_count is not None
+            and metadata.cpu_count < 1
+            and "cpu_count"
+            not in missing_fields
+        ):
+            missing_fields.append(
+                "cpu_count"
+            )
+
+        if (
+            metadata.ram_gb is not None
+            and metadata.ram_gb < 1
+            and "ram_gb"
+            not in missing_fields
+        ):
+            missing_fields.append(
+                "ram_gb"
+            )
+
+    # -------------------------------------------------------------
+    # Return validation failure
+    # -------------------------------------------------------------
+
+    if missing_fields:
+        return MetadataValidationResult(
+            is_valid=False,
+            missing_fields=missing_fields,
+            derived_fields=derived_fields,
+            message=(
+                "Additional information or approval "
+                "is required before the selected "
+                "MCP tool can be called."
+            ),
+        )
+
+    # -------------------------------------------------------------
+    # Validation passed
+    # -------------------------------------------------------------
+
+    return MetadataValidationResult(
+        is_valid=True,
+        missing_fields=[],
+        derived_fields=derived_fields,
+        message="Metadata is valid.",
+    )
+        
 
     # -----------------------------------------------------------------
     # Clarification question
