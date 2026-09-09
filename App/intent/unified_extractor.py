@@ -2,23 +2,32 @@
 Unified Intent and Metadata Extractor Module
 
 Purpose:
-    Extract intent and metadata in one timed Ollama invocation.
+    Extract a supported TechAdmin intent and its metadata in one timed
+    Ollama invocation, then apply narrow deterministic safeguards for
+    explicit administrative commands.
 
 Responsibilities:
     - Classify one supported TechAdmin intent.
     - Extract identity and infrastructure metadata.
     - Detect an explicitly requested API or script backend.
+    - Default password_reset and get_user_details to API when no backend
+      is explicitly requested.
+    - Correct clear intent mistakes for low-ambiguity command phrases.
     - Parse clean, fenced, or reasoning-wrapped JSON.
     - Validate the normalized result through Pydantic.
     - Derive username from email when username is absent.
+    - Recover username and group name from explicit add/remove membership
+      commands when the LLM omits or mislabels them.
     - Measure and log Ollama execution time.
     - Return controlled failure results.
 
 Security:
     - The LLM is never trusted to grant approval.
     - Passwords are never accepted from LLM output.
-    - API/script backend is selected only from explicit user wording or a
-      controlled LLM value.
+    - API/script backend is selected only from explicit user wording, a
+      controlled LLM value, or the documented API default.
+    - Deterministic intent detection uses narrow, operation-specific
+      patterns and does not execute tools by itself.
 """
 
 from __future__ import annotations
@@ -44,7 +53,7 @@ from App.workflow.state import (
 
 
 class UnifiedIntentMetadataExtractor:
-    """Extract intent and metadata using one Ollama call."""
+    """Extract and normalize one TechAdmin intent and its metadata."""
 
     STRING_METADATA_FIELDS: tuple[str, ...] = (
         "username",
@@ -97,15 +106,64 @@ class UnifiedIntentMetadataExtractor:
 
     DETERMINISTIC_INTENT_PATTERNS: dict[IntentType, tuple[str, ...]] = {
         IntentType.GET_USER_DETAILS: (
-            r"\bget\s+(?:the\s+)?user\s+details?\b",
-            r"\bshow\s+(?:the\s+)?user\s+(?:details?|information)\b",
-            r"\blook\s+up\s+(?:the\s+)?user\b",
-            r"\bfind\s+(?:the\s+)?user\s+(?:details?|information)\b",
+            r"\bget\s+(?:the\s+)?(?:ad\s+)?user\s+details?\b",
+            r"\bget\s+details?\s+(?:for|of)\s+(?:the\s+)?(?:ad\s+)?user\b",
+            r"\bshow\s+(?:the\s+)?(?:ad\s+)?user\s+(?:details?|information)\b",
+            r"\bfind\s+(?:the\s+)?(?:ad\s+)?user\s+(?:details?|information)\b",
+            r"\blook\s*up\s+(?:the\s+)?(?:ad\s+)?user\b",
+            r"\bretrieve\s+(?:the\s+)?(?:ad\s+)?user\s+(?:details?|information)\b",
         ),
         IntentType.PASSWORD_RESET: (
-            r"\breset\s+(?:the\s+)?password\b",
-            r"\bchange\s+(?:the\s+)?password\b",
+            r"\breset\s+(?:the\s+)?(?:user\s+|account\s+)?password\b",
+            r"\bchange\s+(?:the\s+)?(?:user\s+|account\s+)?password\b",
             r"\bpassword\s+reset\b",
+            r"\brecover\s+(?:the\s+)?(?:user\s+|account\s+)?password\b",
+        ),
+        IntentType.ACCOUNT_UNLOCK: (
+            r"\bunlock\s+(?:the\s+)?(?:ad\s+)?(?:user\s+)?account\b",
+            r"\bunlock\s+(?:the\s+)?(?:ad\s+)?user\b",
+            r"\baccount\s+unlock\b",
+        ),
+        IntentType.GRANT_ACCESS: (
+            r"\badd\s+(?:existing\s+)?(?:ad\s+)?user\s+.+?\s+to\s+(?:the\s+)?(?:existing\s+)?(?:ad\s+)?group\s+\S+",
+            r"\badd\s+\S+\s+to\s+(?:the\s+)?(?:ad\s+)?group\s+\S+",
+            r"\badd\s+\S+\s+to\s+\S+\s+group\b",
+            r"\bgrant\s+(?:user\s+)?\S+\s+access\s+to\s+(?:group\s+)?\S+",
+            r"\bgrant\s+access\s+to\s+\S+\s+(?:in|through|via)\s+(?:group\s+)?\S+",
+        ),
+        IntentType.REVOKE_ACCESS: (
+            r"\bremove\s+(?:existing\s+)?(?:ad\s+)?user\s+.+?\s+from\s+(?:the\s+)?(?:existing\s+)?(?:ad\s+)?group\s+\S+",
+            r"\bremove\s+\S+\s+from\s+(?:the\s+)?(?:ad\s+)?group\s+\S+",
+            r"\bremove\s+\S+\s+from\s+\S+\s+group\b",
+            r"\brevoke\s+(?:user\s+)?\S+\s+access\s+(?:to|from)\s+(?:group\s+)?\S+",
+            r"\brevoke\s+access\s+(?:for|from)\s+\S+\s+(?:in|through|via)\s+(?:group\s+)?\S+",
+        ),
+        IntentType.CREATE_GROUP: (
+            r"\bcreate\s+(?:a\s+|an\s+)?(?:new\s+)?(?:ad\s+)?(?:security\s+)?group\b",
+            r"\bnew\s+(?:ad\s+)?(?:security\s+)?group\b",
+            r"\bprovision\s+(?:a\s+|an\s+)?(?:new\s+)?(?:ad\s+)?group\b",
+        ),
+        IntentType.CREATE_USER: (
+            r"\bcreate\s+(?:a\s+|an\s+)?(?:new\s+)?(?:active\s+directory\s+|ad\s+)?user(?:\s+account)?\b",
+            r"\bprovision\s+(?:a\s+|an\s+)?(?:new\s+)?(?:active\s+directory\s+|ad\s+)?user\b",
+            r"\bonboard\s+(?:a\s+|an\s+)?(?:new\s+)?(?:active\s+directory\s+|ad\s+)?user\b",
+        ),
+        IntentType.DELETE_USER: (
+            r"\bdelete\s+(?:the\s+)?(?:active\s+directory\s+|ad\s+)?user(?:\s+account)?\b",
+            r"\bremove\s+(?:the\s+)?(?:active\s+directory\s+|ad\s+)?user\s+account\b",
+            r"\bdeprovision\s+(?:the\s+)?(?:active\s+directory\s+|ad\s+)?user\b",
+        ),
+        IntentType.FAILED_LOGIN_INVESTIGATION: (
+            r"\binvestigate\s+(?:the\s+)?failed\s+(?:logins?|sign[ -]?ins?)\b",
+            r"\bcheck\s+(?:the\s+)?failed\s+(?:logins?|sign[ -]?ins?)\b",
+            r"\bauthentication\s+failures?\b",
+            r"\bwhy\s+(?:is|was)\s+.+?\s+(?:locked|locking\s+out)\b",
+        ),
+        IntentType.CREATE_VM: (
+            r"\bcreate\s+(?:a\s+|an\s+)?(?:new\s+)?vm\b",
+            r"\bcreate\s+(?:a\s+|an\s+)?(?:new\s+)?virtual\s+machine\b",
+            r"\bprovision\s+(?:a\s+|an\s+)?(?:new\s+)?vm\b",
+            r"\bprovision\s+(?:a\s+|an\s+)?(?:new\s+)?virtual\s+machine\b",
         ),
     }
 
@@ -113,6 +171,16 @@ class UnifiedIntentMetadataExtractor:
         IntentType.GET_USER_DETAILS,
         IntentType.PASSWORD_RESET,
     }
+
+    MEMBERSHIP_PATTERN = re.compile(
+        r"\b(?P<verb>add|remove)\s+"
+        r"(?:existing\s+)?(?:ad\s+)?(?:user\s+)?"
+        r"(?P<user>[^\s,]+)\s+"
+        r"(?P<direction>to|from)\s+"
+        r"(?:the\s+)?(?:existing\s+)?(?:ad\s+)?(?:group\s+)?"
+        r"(?P<group>[^\s,.;]+)",
+        flags=re.IGNORECASE,
+    )
 
     def __init__(
         self,
@@ -123,12 +191,10 @@ class UnifiedIntentMetadataExtractor:
             "MODEL_NAME",
             "qwen3:14b",
         )
-
         self.ollama_host = ollama_host or os.getenv(
             "OLLAMA_HOST",
             "http://localhost:11434",
         )
-
         self.llm: ChatOllama | None = None
         self.initialization_error: str | None = None
 
@@ -139,57 +205,38 @@ class UnifiedIntentMetadataExtractor:
                 temperature=0,
                 format="json",
             )
-
             logger.info(
-                "UnifiedIntentMetadataExtractor initialized | "
-                "model={} | ollama_host={}",
+                "UnifiedIntentMetadataExtractor initialized | model={} | ollama_host={}",
                 self.model_name,
                 self.ollama_host,
             )
-
         except Exception as exc:
             self.initialization_error = type(exc).__name__
-
             logger.exception(
-                "UNIFIED_EXTRACTOR_INITIALIZATION_FAILED | "
-                "model={} | ollama_host={} | error_type={}",
+                "UNIFIED_EXTRACTOR_INITIALIZATION_FAILED | model={} | "
+                "ollama_host={} | error_type={}",
                 self.model_name,
                 self.ollama_host,
                 self.initialization_error,
             )
 
-    def extract_all(
-        self,
-        user_input: str,
-    ) -> UnifiedExtractionResult:
-        """Extract and validate intent and metadata from one user request."""
+    def extract_all(self, user_input: str) -> UnifiedExtractionResult:
+        """Extract and validate intent and metadata from one request."""
 
         normalized_input = self._normalize_user_input(user_input)
-
         if not normalized_input:
-            logger.warning(
-                "UNIFIED_EXTRACTION_REJECTED | reason=empty_user_input"
-            )
             return self._build_failure_result(
                 explanation="User input is empty.",
                 error="User input is empty",
             )
 
         if self.llm is None:
-            logger.error(
-                "UNIFIED_EXTRACTION_REJECTED | reason=llm_not_initialized | "
-                "initialization_error={}",
-                self.initialization_error,
-            )
             return self._build_failure_result(
                 explanation="The configured Ollama model is unavailable.",
                 error=self.initialization_error or "LLM not initialized",
             )
 
-        prompt = UNIFIED_EXTRACTION_PROMPT.format(
-            user_input=normalized_input,
-        )
-
+        prompt = UNIFIED_EXTRACTION_PROMPT.format(user_input=normalized_input)
         started_at = datetime.now()
         counter_started = time.perf_counter()
 
@@ -203,7 +250,6 @@ class UnifiedIntentMetadataExtractor:
         try:
             response = self.llm.invoke(prompt)
             duration_seconds = time.perf_counter() - counter_started
-
             logger.info(
                 "OLLAMA_CALL_COMPLETED | model={} | duration_seconds={:.3f}",
                 self.model_name,
@@ -211,26 +257,20 @@ class UnifiedIntentMetadataExtractor:
             )
 
             response_text = self._extract_response_text(response.content)
-
             logger.debug(
-                "UNIFIED_EXTRACTION_RAW_RESPONSE | response={}",
-                response_text,
+                "UNIFIED_EXTRACTION_RAW_RESPONSE | response_length={}",
+                len(response_text),
             )
 
             raw_result = self._extract_json_object(response_text)
-
             prepared_result = self._prepare_result(
                 raw_result=raw_result,
                 user_input=normalized_input,
             )
-
             validated_result = UnifiedExtractionResult.model_validate(
                 prepared_result
             )
-
-            final_result = self._derive_username_from_email(
-                validated_result
-            )
+            final_result = self._derive_username_from_email(validated_result)
 
             logger.info(
                 "UNIFIED_EXTRACTION_COMPLETED | intent={} | confidence={} | "
@@ -251,7 +291,6 @@ class UnifiedIntentMetadataExtractor:
                     ).keys()
                 ),
             )
-
             return final_result
 
         except ValidationError as exc:
@@ -264,13 +303,9 @@ class UnifiedIntentMetadataExtractor:
                 exc.error_count(),
             )
             return self._build_failure_result(
-                explanation=(
-                    "The model response did not match the required "
-                    "extraction schema."
-                ),
+                explanation="The model response did not match the required extraction schema.",
                 error="Pydantic validation failed",
             )
-
         except (ValueError, json.JSONDecodeError) as exc:
             duration_seconds = time.perf_counter() - counter_started
             logger.exception(
@@ -284,7 +319,6 @@ class UnifiedIntentMetadataExtractor:
                 explanation="The model response could not be parsed safely.",
                 error=type(exc).__name__,
             )
-
         except Exception as exc:
             duration_seconds = time.perf_counter() - counter_started
             logger.exception(
@@ -302,54 +336,35 @@ class UnifiedIntentMetadataExtractor:
 
     @staticmethod
     def _normalize_user_input(user_input: Any) -> str:
-        if not isinstance(user_input, str):
-            return ""
-        return user_input.strip()
+        return user_input.strip() if isinstance(user_input, str) else ""
 
     @classmethod
     def _detect_explicit_execution_backend(
         cls,
         user_input: str,
     ) -> ExecutionBackend | None:
-        """
-        Detect an explicitly requested backend from the original query.
-
-        If both API and script wording are present, return None so the
-        Identity Agent asks for clarification.
-        """
-
         if not isinstance(user_input, str):
             return None
 
-        normalized_input = " ".join(
-            user_input.strip().casefold().split()
-        )
-
+        normalized = " ".join(user_input.strip().casefold().split())
         script_requested = any(
-            re.search(pattern, normalized_input, flags=re.IGNORECASE)
-            is not None
+            re.search(pattern, normalized) is not None
             for pattern in cls.SCRIPT_BACKEND_PATTERNS
         )
-
         api_requested = any(
-            re.search(pattern, normalized_input, flags=re.IGNORECASE)
-            is not None
+            re.search(pattern, normalized) is not None
             for pattern in cls.API_BACKEND_PATTERNS
         )
 
         if script_requested and api_requested:
             logger.warning(
-                "EXECUTION_BACKEND_AMBIGUOUS | "
-                "reason=api_and_script_both_requested"
+                "EXECUTION_BACKEND_AMBIGUOUS | reason=api_and_script_both_requested"
             )
             return None
-
         if script_requested:
             return ExecutionBackend.SCRIPT
-
         if api_requested:
             return ExecutionBackend.API
-
         return None
 
     @classmethod
@@ -357,41 +372,33 @@ class UnifiedIntentMetadataExtractor:
         cls,
         user_input: str,
     ) -> IntentType | None:
-        """Corroborate only exact, low-ambiguity supported operations."""
-
         if not isinstance(user_input, str):
             return None
 
-        normalized_input = " ".join(
-            user_input.strip().casefold().split()
-        )
-
-        matched_intents = [
+        normalized = " ".join(user_input.strip().casefold().split())
+        matched = [
             intent
             for intent, patterns in cls.DETERMINISTIC_INTENT_PATTERNS.items()
-            if any(
-                re.search(pattern, normalized_input, flags=re.IGNORECASE)
-                is not None
-                for pattern in patterns
-            )
+            if any(re.search(pattern, normalized) is not None for pattern in patterns)
         ]
 
-        if len(matched_intents) == 1:
-            return matched_intents[0]
+        # Resolve the phrase "add user ... to group" as grant_access even
+        # though the words "user" and "group" could otherwise resemble
+        # creation requests. Likewise for remove-from-group.
+        if IntentType.GRANT_ACCESS in matched:
+            return IntentType.GRANT_ACCESS
+        if IntentType.REVOKE_ACCESS in matched:
+            return IntentType.REVOKE_ACCESS
 
-        return None
+        unique = list(dict.fromkeys(matched))
+        return unique[0] if len(unique) == 1 else None
 
     @staticmethod
-    def _normalize_llm_backend(
-        value: Any,
-    ) -> ExecutionBackend | None:
+    def _normalize_llm_backend(value: Any) -> ExecutionBackend | None:
         if isinstance(value, ExecutionBackend):
             return value
-
         if not isinstance(value, str):
             return None
-
-        normalized_value = value.strip().casefold()
 
         aliases = {
             "api": ExecutionBackend.API,
@@ -403,98 +410,95 @@ class UnifiedIntentMetadataExtractor:
             "powershell": ExecutionBackend.SCRIPT,
             "powershell script": ExecutionBackend.SCRIPT,
         }
+        return aliases.get(value.strip().casefold())
 
-        return aliases.get(normalized_value)
+    @classmethod
+    def _extract_membership_metadata(
+        cls,
+        user_input: str,
+    ) -> dict[str, str | None]:
+        match = cls.MEMBERSHIP_PATTERN.search(user_input)
+        if match is None:
+            return {}
+
+        raw_user = match.group("user").strip()
+        group_name = match.group("group").strip()
+        result: dict[str, str | None] = {
+            "group_name": group_name,
+        }
+
+        if "@" in raw_user:
+            local_part = raw_user.split("@", maxsplit=1)[0].strip()
+            result.update(
+                {
+                    "email": raw_user,
+                    "username": local_part or None,
+                    "username_source": "derived_from_email" if local_part else None,
+                }
+            )
+        else:
+            result.update(
+                {
+                    "username": raw_user,
+                    "username_source": "explicit",
+                }
+            )
+
+        return result
 
     @staticmethod
     def _extract_response_text(content: Any) -> str:
-        if isinstance(content, str):
-            normalized_content = content.strip()
-            if normalized_content:
-                return normalized_content
+        if isinstance(content, str) and content.strip():
+            return content.strip()
 
         if isinstance(content, list):
-            text_parts: list[str] = []
-
+            parts: list[str] = []
             for item in content:
                 if isinstance(item, str):
-                    text_parts.append(item)
-                elif isinstance(item, dict):
-                    text_value = item.get("text")
-                    if isinstance(text_value, str):
-                        text_parts.append(text_value)
+                    parts.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            combined = "".join(parts).strip()
+            if combined:
+                return combined
 
-            normalized_content = "".join(text_parts).strip()
-            if normalized_content:
-                return normalized_content
-
-        raise ValueError(
-            "The model returned empty or unsupported response content."
-        )
+        raise ValueError("The model returned empty or unsupported response content.")
 
     @staticmethod
     def _remove_markdown_fences(response_text: str) -> str:
-        cleaned_response = response_text.strip()
-        cleaned_response = re.sub(
+        cleaned = re.sub(
             r"^```(?:json)?\s*",
             "",
-            cleaned_response,
+            response_text.strip(),
             flags=re.IGNORECASE,
         )
-        cleaned_response = re.sub(
-            r"\s*```$",
-            "",
-            cleaned_response,
-        )
-        return cleaned_response.strip()
+        return re.sub(r"\s*```$", "", cleaned).strip()
 
     @classmethod
-    def _extract_json_object(
-        cls,
-        response_text: str,
-    ) -> dict[str, Any]:
-        if not response_text.strip():
+    def _extract_json_object(cls, response_text: str) -> dict[str, Any]:
+        cleaned = cls._remove_markdown_fences(response_text)
+        if not cleaned:
             raise ValueError("The model returned an empty response.")
 
-        cleaned_response = cls._remove_markdown_fences(response_text)
-
         try:
-            parsed_response = json.loads(cleaned_response)
-
-            if not isinstance(parsed_response, dict):
-                raise ValueError(
-                    "The model response was JSON but was not an object."
-                )
-
-            if "intent" not in parsed_response:
-                raise ValueError(
-                    "The model response did not contain an intent field."
-                )
-
-            return parsed_response
-
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict) and "intent" in parsed:
+                return parsed
         except json.JSONDecodeError:
             pass
 
         decoder = json.JSONDecoder()
-
-        for character_index, character in enumerate(cleaned_response):
+        for index, character in enumerate(cleaned):
             if character != "{":
                 continue
-
             try:
-                candidate, _ = decoder.raw_decode(
-                    cleaned_response[character_index:]
-                )
+                candidate, _ = decoder.raw_decode(cleaned[index:])
             except json.JSONDecodeError:
                 continue
-
             if isinstance(candidate, dict) and "intent" in candidate:
                 return candidate
 
-        raise ValueError(
-            "No valid intent JSON object was found in the model response."
-        )
+        raise ValueError("No valid intent JSON object was found in the model response.")
 
     @classmethod
     def _prepare_result(
@@ -503,19 +507,14 @@ class UnifiedIntentMetadataExtractor:
         raw_result: dict[str, Any],
         user_input: str,
     ) -> dict[str, Any]:
-        """Normalize the model response before Pydantic validation."""
-
         raw_metadata = raw_result.get("metadata")
         if not isinstance(raw_metadata, dict):
             raw_metadata = {}
 
         normalized_metadata = {
-            field_name: cls._normalize_optional_string(
-                raw_metadata.get(field_name)
-            )
-            for field_name in cls.STRING_METADATA_FIELDS
+            field: cls._normalize_optional_string(raw_metadata.get(field))
+            for field in cls.STRING_METADATA_FIELDS
         }
-
         normalized_metadata["cpu_count"] = cls._normalize_integer(
             raw_metadata.get("cpu_count")
         )
@@ -523,94 +522,79 @@ class UnifiedIntentMetadataExtractor:
             raw_metadata.get("ram_gb")
         )
 
-        explicit_backend = cls._detect_explicit_execution_backend(
-            user_input
+        model_intent = IntentType(
+            cls._normalize_intent(raw_result.get("intent"))
         )
+        deterministic_intent = cls._detect_deterministic_intent(user_input)
+        selected_intent = deterministic_intent or model_intent
+
+        membership_metadata = cls._extract_membership_metadata(user_input)
+        if selected_intent in {IntentType.GRANT_ACCESS, IntentType.REVOKE_ACCESS}:
+            for key, value in membership_metadata.items():
+                if value is not None:
+                    normalized_metadata[key] = value
+
+        explicit_backend = cls._detect_explicit_execution_backend(user_input)
         llm_backend = cls._normalize_llm_backend(
             raw_metadata.get("execution_backend")
         )
+        selected_backend = explicit_backend or llm_backend
+        default_api_applied = False
 
-        intent_value = cls._normalize_intent(
-            raw_result.get("intent")
-        )
-        normalized_intent = IntentType(intent_value)
-
-        # For password reset and user details, API is the default only when
-        # the user did not explicitly request API or script and the LLM did
-        # not return a controlled backend.
-        selected_backend = (
-            explicit_backend
-            if explicit_backend is not None
-            else llm_backend
-        )
-        if (
-            selected_backend is None
-            and normalized_intent in cls.DEFAULT_API_INTENTS
-        ):
+        if selected_backend is None and selected_intent in cls.DEFAULT_API_INTENTS:
             selected_backend = ExecutionBackend.API
+            default_api_applied = True
 
         normalized_metadata["execution_backend"] = (
-            selected_backend.value
-            if selected_backend is not None
-            else None
+            selected_backend.value if selected_backend is not None else None
         )
 
+        # These values must come from trusted controls, never the LLM.
         normalized_metadata["approval_granted"] = False
         normalized_metadata["initial_password"] = None
         normalized_metadata["domain_password"] = None
         normalized_metadata["admin_password"] = None
 
-        model_confidence = cls._normalize_confidence(
-            raw_result.get("confidence")
-        )
-        deterministic_intent = cls._detect_deterministic_intent(user_input)
-
-        # A zero/missing model confidence is repaired only when the model's
-        # controlled intent agrees with an explicit deterministic phrase.
-        # This avoids globally bypassing the confidence safety threshold.
-        if (
-            model_confidence == 0.0
-            and deterministic_intent is normalized_intent
-            and normalized_intent is not IntentType.UNKNOWN
-        ):
-            confidence = 0.99
-            confidence_source = "deterministic_corroboration"
+        model_confidence = cls._normalize_confidence(raw_result.get("confidence"))
+        if deterministic_intent is not None:
+            confidence = max(model_confidence, 0.99)
+            confidence_source = "deterministic_classification"
         else:
             confidence = model_confidence
             confidence_source = "model"
 
         explanation = raw_result.get("explanation")
-        if not isinstance(explanation, str) or not explanation.strip() or explanation.strip().casefold() == "none":
-            explanation = (
-                f"Explicit request classified as {normalized_intent.value}."
-                if deterministic_intent is normalized_intent
-                else "No explanation was supplied by the model."
-            )
+        invalid_explanation = (
+            not isinstance(explanation, str)
+            or not explanation.strip()
+            or explanation.strip().casefold() in {"none", "null", "n/a"}
+            or model_intent is not selected_intent
+        )
+        if invalid_explanation:
+            explanation = f"Explicit request classified as {selected_intent.value}."
 
         logger.info(
-            "EXECUTION_BACKEND_RESOLVED | explicit_backend={} | "
-            "llm_backend={} | selected_backend={} | default_api_applied={}",
+            "INTENT_RESOLVED | model_intent={} | deterministic_intent={} | "
+            "selected_intent={} | model_confidence={} | final_confidence={} | source={}",
+            model_intent.value,
+            deterministic_intent.value if deterministic_intent else None,
+            selected_intent.value,
+            model_confidence,
+            confidence,
+            confidence_source,
+        )
+        logger.info(
+            "EXECUTION_BACKEND_RESOLVED | explicit_backend={} | llm_backend={} | "
+            "selected_backend={} | default_api_applied={}",
             explicit_backend.value if explicit_backend else None,
             llm_backend.value if llm_backend else None,
             selected_backend.value if selected_backend else None,
-            (
-                explicit_backend is None
-                and llm_backend is None
-                and normalized_intent in cls.DEFAULT_API_INTENTS
-            ),
-        )
-        logger.info(
-            "INTENT_CONFIDENCE_RESOLVED | model_confidence={} | "
-            "deterministic_intent={} | final_confidence={} | source={}",
-            model_confidence,
-            deterministic_intent.value if deterministic_intent else None,
-            confidence,
-            confidence_source,
+            default_api_applied,
         )
 
         return {
             "success": True,
-            "intent": intent_value,
+            "intent": selected_intent.value,
             "confidence": confidence,
             "explanation": explanation.strip(),
             "metadata": normalized_metadata,
@@ -621,10 +605,8 @@ class UnifiedIntentMetadataExtractor:
     def _normalize_optional_string(value: Any) -> str | None:
         if value is None:
             return None
-
-        normalized_value = str(value).strip()
-
-        if normalized_value.casefold() in {
+        normalized = str(value).strip()
+        if normalized.casefold() in {
             "",
             "null",
             "none",
@@ -634,17 +616,12 @@ class UnifiedIntentMetadataExtractor:
             "not available",
         }:
             return None
-
-        return normalized_value
+        return normalized
 
     @staticmethod
     def _normalize_integer(value: Any) -> int | None:
-        if value is None:
+        if value is None or (isinstance(value, str) and not value.strip()):
             return None
-
-        if isinstance(value, str) and not value.strip():
-            return None
-
         try:
             return int(value)
         except (TypeError, ValueError):
@@ -654,27 +631,17 @@ class UnifiedIntentMetadataExtractor:
     def _normalize_intent(value: Any) -> str:
         if not isinstance(value, str):
             return IntentType.UNKNOWN.value
-
-        normalized_value = value.strip().casefold()
-        supported_intents = {intent.value for intent in IntentType}
-
-        if normalized_value not in supported_intents:
-            logger.warning(
-                "UNIFIED_EXTRACTION_UNKNOWN_INTENT | model_intent={}",
-                normalized_value,
-            )
-            return IntentType.UNKNOWN.value
-
-        return normalized_value
+        normalized = value.strip().casefold()
+        supported = {intent.value for intent in IntentType}
+        return normalized if normalized in supported else IntentType.UNKNOWN.value
 
     @staticmethod
     def _normalize_confidence(value: Any) -> float:
         try:
-            normalized_confidence = float(value)
+            confidence = float(value)
         except (TypeError, ValueError):
             return 0.0
-
-        return max(0.0, min(1.0, normalized_confidence))
+        return max(0.0, min(1.0, confidence))
 
     @staticmethod
     def _derive_username_from_email(
@@ -683,39 +650,37 @@ class UnifiedIntentMetadataExtractor:
         metadata = result.metadata
 
         if metadata.username:
-            normalized_metadata = metadata.model_copy(
+            source = metadata.username_source
+            if not source:
+                source = "derived_from_email" if metadata.email else "explicit"
+            return result.model_copy(
                 update={
-                    "username_source": (
-                        metadata.username_source or "explicit"
+                    "metadata": metadata.model_copy(
+                        update={"username_source": source}
                     )
                 }
-            )
-            return result.model_copy(
-                update={"metadata": normalized_metadata}
             )
 
         if not metadata.email or "@" not in metadata.email:
             return result
 
-        email_local_part = metadata.email.split("@", maxsplit=1)[0].strip()
-        if not email_local_part:
+        local_part = metadata.email.split("@", maxsplit=1)[0].strip()
+        if not local_part:
             return result
 
-        normalized_metadata = metadata.model_copy(
-            update={
-                "username": email_local_part,
-                "username_source": "derived_from_email",
-            }
-        )
-
         logger.info(
-            "UNIFIED_EXTRACTION_DERIVED_FIELD | field=username | "
-            "source=email | username={}",
-            email_local_part,
+            "UNIFIED_EXTRACTION_DERIVED_FIELD | field=username | source=email | username={}",
+            local_part,
         )
-
         return result.model_copy(
-            update={"metadata": normalized_metadata}
+            update={
+                "metadata": metadata.model_copy(
+                    update={
+                        "username": local_part,
+                        "username_source": "derived_from_email",
+                    }
+                )
+            }
         )
 
     @staticmethod
@@ -738,38 +703,26 @@ class UnifiedIntentMetadataExtractor:
         metadata: dict[str, Any] | IdentityMetadata,
         intent: str,
     ) -> tuple[bool, str]:
-        """Backward-compatible extraction-level validation."""
-
         try:
-            validated_metadata = (
+            validated = (
                 metadata
                 if isinstance(metadata, IdentityMetadata)
                 else IdentityMetadata.model_validate(metadata)
             )
         except ValidationError:
-            logger.exception(
-                "EXTRACTION_METADATA_VALIDATION_FAILED | intent={}",
-                intent,
-            )
             return False, "Extracted metadata is invalid."
 
         if intent == IntentType.UNKNOWN.value:
             return False, "The intent is unsupported."
 
-        if (
-            intent == IntentType.GET_USER_DETAILS.value
-            and not (
-                validated_metadata.username
-                or validated_metadata.email
-                or validated_metadata.user_id
-            )
+        if intent == IntentType.GET_USER_DETAILS.value and not (
+            validated.username or validated.email or validated.user_id
         ):
             return False, "Username, email, or user ID is required."
 
         return (
             True,
-            "Final operation readiness validation will be performed by "
-            "IdentityAgent.",
+            "Final operation readiness validation will be performed by IdentityAgent.",
         )
 
     def get_supported_intents(self) -> list[str]:
