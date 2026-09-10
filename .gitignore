@@ -44,7 +44,7 @@ Thumbs.db
 .pylintrc
 .pyright
 *.code-workspace
-
+.streamlit/secrets.toml
 # Environment Variables
 .env
 .env.local
