@@ -34,3 +34,10 @@ python-multipart
 
 # Model Context Protocol
 mcp[cli]>=2.0,<3.0
+
+
+
+# Streamlit UI and Microsoft Entra OIDC authentication
+streamlit[auth]>=1.42.0
+pandas
+Authlib>=1.3.2

@@ -293,6 +293,7 @@ import pandas as pd
 import streamlit as st
 
 from flow_service import LOG_FILE, FlowService, check_ollama, get_config_status
+from auth_service import require_authentication, render_authenticated_user
 
 # ---------------------------------------------------------------------------
 # Page setup
@@ -529,9 +530,20 @@ def render_response(response: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
-def render_sidebar() -> None:
-    """Environment status, example queries and session controls."""
+def render_sidebar(authenticated_user: Dict[str, Any]) -> None:
+    """
+    Display the authenticated employee, environment status,
+    example queries, and session controls.
+    """
+
     with st.sidebar:
+        # Display the employee authenticated through Microsoft Entra.
+        st.header("Account")
+        render_authenticated_user(authenticated_user)
+
+        st.divider()
+
+        # Existing sidebar content starts here.
         st.header("Environment")
 
         status = get_config_status()
@@ -591,6 +603,22 @@ def render_sidebar() -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
+    """
+    Run the authenticated TechAdmin user interface.
+
+    Authentication is checked before FlowService, DemoFlow,
+    Ollama, or Microsoft Graph clients are initialized.
+    """
+
+    # First page: Microsoft authentication.
+    #
+    # If the user is not authenticated, require_authentication()
+    # displays the login page and stops this Streamlit run.
+    authenticated_user = require_authentication()
+
+    # Second page: existing TechAdmin application.
+    #
+    # This code is reached only after successful Microsoft login.
     init_state()
 
     st.title("🛠️ TechAdmin IT Support")
@@ -646,7 +674,8 @@ def main() -> None:
     # the Clear and Download controls appear on the same run as the first query
     # rather than only after the next interaction. Streamlit places this content
     # in the sidebar regardless of when it is called.
-    render_sidebar()
+
+    render_sidebar(authenticated_user)
 
 
 if __name__ == "__main__":
