@@ -93,3 +93,6 @@ Thumbs.db
 .temp/
 temp/
 *.pid
+
+# Generated workflow output
+output/*.json

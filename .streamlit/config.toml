@@ -1,0 +1,8 @@
+[server]
+address = "127.0.0.1"
+port = 8503
+headless = true
+
+[browser]
+serverAddress = "techadmin.coforge.com"
+serverPort = 80
