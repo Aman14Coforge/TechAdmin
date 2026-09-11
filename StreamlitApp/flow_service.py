@@ -32,7 +32,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 from loguru import logger  # noqa: E402
 
-from App.utils.config import Config  # noqa: E402
+from App.utils.config import Config, Logger  # noqa: E402
+
+Logger.setup()
 
 # Scripts/ is not a package, which is why SCRIPTS_DIR was added to sys.path above.
 # Importing DemoFlow (instead of copying its logic) keeps the UI in step with
@@ -51,7 +53,12 @@ class FlowService:
         # so this should happen once per session, not once per query.
         self.demo = DemoFlow()
 
-    def run_query(self, user_query: str) -> Dict[str, Any]:
+    def run_query(
+        self,
+        user_query: str,
+        confirmed: bool = False,
+        request_id: str = None,
+    ) -> Dict[str, Any]:
         """
         Run one user query through the full pipeline.
 
@@ -63,13 +70,20 @@ class FlowService:
             user_query: The user's request in plain English, for example
                 "Get details for amit.bhagat@coforge.com" or
                 "Reset password for aman.gupta"
+            confirmed: True when the user has already approved a sensitive
+                operation that the guardrails asked them to confirm.
+            request_id: Reuse an existing request ID, so a confirmed retry is
+                tied to the original request in the audit log.
 
         Returns:
             The response dict produced by DemoFlow.execute_flow(), containing
             success, request_id, intent, message, metadata, result and error.
         """
         user_query = (user_query or "").strip()
-        request_id = f"ui_{uuid.uuid4().hex[:8]}"
+
+        # The same request ID is reused when the user confirms, so the original
+        # request and its confirmation are one thread in the audit log.
+        request_id = request_id or f"ui_{uuid.uuid4().hex[:8]}"
 
         if not user_query:
             return {
@@ -85,7 +99,11 @@ class FlowService:
         logger.info(f"UI query | request_id={request_id} | query={user_query}")
 
         try:
-            return self.demo.execute_flow(user_query, request_id=request_id)
+            return self.demo.execute_flow(
+                user_query,
+                request_id=request_id,
+                confirmed=confirmed,
+            )
         except Exception as exc:
             # DemoFlow already handles its own errors, so reaching here means
             # something unexpected happened. Show it rather than a blank screen.
