@@ -19,9 +19,10 @@ from App.workflow.state import (
 
 class AgentRouter:
     """
-    The router selects an agent family.
+    Select the agent family for a classified intent.
 
-    The Identity Agent selects the exact tool.
+    The router selects only the agent. The selected agent is responsible
+    for validation, MCP server selection and MCP tool selection.
     """
 
     INTENT_AGENT_MAPPING: dict[
@@ -45,6 +46,18 @@ class AgentRouter:
 
         IntentType.FAILED_LOGIN_INVESTIGATION:
             AgentType.IDENTITY,
+
+        IntentType.CREATE_USER:
+            AgentType.IDENTITY,
+
+        IntentType.DELETE_USER:
+            AgentType.IDENTITY,
+
+        IntentType.CREATE_GROUP:
+            AgentType.IDENTITY,
+
+        IntentType.CREATE_VM:
+            AgentType.IDENTITY,
     }
 
     def route(
@@ -52,6 +65,25 @@ class AgentRouter:
         intent: str | IntentType,
         metadata: dict | None = None,
     ) -> RoutingResult:
+        """
+        Route a classified intent to an agent.
+
+        Args:
+            intent:
+                Intent string or IntentType.
+
+            metadata:
+                Extracted metadata. Kept for compatibility and future
+                routing policies.
+
+        Returns:
+            Validated RoutingResult.
+
+        Raises:
+            ValueError:
+                If the intent is unknown or no agent is registered.
+        """
+
         try:
             normalized_intent = (
                 intent
@@ -59,12 +91,35 @@ class AgentRouter:
                     intent,
                     IntentType,
                 )
-                else IntentType(intent)
+                else IntentType(
+                    intent.strip().casefold()
+                )
             )
-        except ValueError as exc:
+
+        except (
+            ValueError,
+            AttributeError,
+        ) as exc:
+            logger.warning(
+                "AGENT_ROUTING_REJECTED | "
+                "intent={} | reason=invalid_intent",
+                intent,
+            )
+
             raise ValueError(
                 f"Unsupported intent: {intent}"
             ) from exc
+
+        if normalized_intent is IntentType.UNKNOWN:
+            logger.warning(
+                "AGENT_ROUTING_REJECTED | "
+                "intent=unknown"
+            )
+
+            raise ValueError(
+                "The request does not match a supported "
+                "TechAdmin operation."
+            )
 
         agent_type = (
             self.INTENT_AGENT_MAPPING.get(
@@ -73,9 +128,16 @@ class AgentRouter:
         )
 
         if agent_type is None:
+            logger.error(
+                "AGENT_ROUTING_FAILED | "
+                "intent={} | "
+                "reason=no_registered_agent",
+                normalized_intent.value,
+            )
+
             raise ValueError(
-                f"No agent is registered for "
-                f"intent '{normalized_intent.value}'."
+                f"No agent is registered for intent "
+                f"'{normalized_intent.value}'."
             )
 
         result = RoutingResult(
@@ -91,10 +153,17 @@ class AgentRouter:
         )
 
         logger.info(
-            "AGENT_ROUTED | intent={} | "
-            "selected_agent={}",
+            "AGENT_ROUTED | "
+            "intent={} | "
+            "selected_agent={} | "
+            "metadata_fields={}",
             normalized_intent.value,
             result.agent_name,
+            sorted(
+                metadata.keys()
+                if isinstance(metadata, dict)
+                else []
+            ),
         )
 
         return result
@@ -102,11 +171,27 @@ class AgentRouter:
     def get_supported_agents(
         self,
     ) -> list:
+        """
+        Return all registered agent names.
+        """
+
         return sorted(
             {
                 f"{agent.value}_agent"
-                for agent in (
-                    self.INTENT_AGENT_MAPPING.values()
-                )
+                for agent
+                in self.INTENT_AGENT_MAPPING.values()
             }
+        )
+
+    def get_supported_intents(
+        self,
+    ) -> list:
+        """
+        Return every intent registered with the router.
+        """
+
+        return sorted(
+            intent.value
+            for intent
+            in self.INTENT_AGENT_MAPPING
         )
