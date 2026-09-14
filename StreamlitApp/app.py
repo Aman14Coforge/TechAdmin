@@ -1,34 +1,108 @@
-"""TechAdmin Streamlit UI with guardrail confirmation and session password display."""
+"""
+TechAdmin Streamlit UI with guardrail confirmation and session password display.
+
+Features:
+    - Structured tables only for workflow results.
+    - Guardrail confirmation controls for sensitive operations.
+    - Reuses request ID and correlation ID after confirmation.
+    - Displays generated temporary passwords in a dedicated session panel.
+    - Removes the dashboard-only secret before conversation history and JSON download.
+    - Supports Microsoft Graph and PowerShell result shapes.
+    - Avoids conditional Streamlit expressions that can render DeltaGenerator details.
+
+Run from the project root:
+    python -m streamlit run StreamlitApp/app.py
+"""
+
 from __future__ import annotations
 
 import copy
 import json
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Iterable
 
 import pandas as pd
 import streamlit as st
-from flow_service import LOG_FILE, FlowService, check_ollama, get_config_status
 
-st.set_page_config(page_title="TechAdmin IT Support", page_icon="🛠️", layout="centered")
+from flow_service import (
+    LOG_FILE,
+    FlowService,
+    check_ollama,
+    get_config_status,
+)
+
+
+# ---------------------------------------------------------------------------
+# Page configuration
+# ---------------------------------------------------------------------------
+
+st.set_page_config(
+    page_title="TechAdmin IT Support",
+    page_icon="🛠️",
+    layout="centered",
+)
+
 
 EXAMPLES = [
     "Get user details for Shreesanyog.Rath@Coforge.com",
     "Get user details for Shreesanyog.Rath@Coforge.com via script",
+    "Get user details for Shreesanyog.Rath@Coforge.com via API",
     "Reset password for MigrationTest2@Coforge.com",
+    "Reset password for MigrationTest2@Coforge.com via script",
     "Add user MigrationTest2@Coforge.com to group TechAI_Group",
     "Remove user MigrationTest2@Coforge.com from group TechAI_Group",
 ]
-YES_WORDS = {"yes", "y", "confirm", "confirmed", "proceed", "approve", "approved", "ok", "okay"}
-NO_WORDS = {"no", "n", "cancel", "stop", "abort"}
+
+YES_WORDS = {
+    "yes",
+    "y",
+    "confirm",
+    "confirmed",
+    "proceed",
+    "approve",
+    "approved",
+    "ok",
+    "okay",
+}
+
+NO_WORDS = {
+    "no",
+    "n",
+    "cancel",
+    "stop",
+    "abort",
+    "nevermind",
+}
+
+SENSITIVE_HISTORY_KEYS = {
+    "new_password",
+    "temporary_password",
+    "password",
+    "initial_password",
+    "domain_password",
+    "admin_password",
+    "client_secret",
+    "access_token",
+    "refresh_token",
+    "_dashboard_secret",
+}
+
+
+# ---------------------------------------------------------------------------
+# Service and session state
+# ---------------------------------------------------------------------------
 
 
 @st.cache_resource(show_spinner="Starting TechAdmin...")
 def get_service() -> FlowService:
+    """Create and cache the workflow service."""
+
     return FlowService()
 
 
 def init_state() -> None:
+    """Initialize the Streamlit session keys used by the application."""
+
     st.session_state.setdefault("conversation", [])
     st.session_state.setdefault("queued_query", None)
     st.session_state.setdefault("pending_confirmation", None)
@@ -36,187 +110,682 @@ def init_state() -> None:
     st.session_state.setdefault("ollama_check_result", None)
 
 
-def text(value: Any) -> str:
-    if value is None or value == "": return "—"
-    if isinstance(value, bool): return "Yes" if value else "No"
+# ---------------------------------------------------------------------------
+# Generic data and table helpers
+# ---------------------------------------------------------------------------
+
+
+def display_text(value: Any) -> str:
+    """Convert a value into readable table text."""
+
+    if value is None or value == "":
+        return "—"
+
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+
     return str(value)
 
 
-def table(rows, caption="") -> None:
-    rows = [(a, b) for a, b in rows if b not in (None, "")]
-    if not rows: return
-    if caption: st.markdown(f"**{caption}**")
-    st.dataframe(pd.DataFrame([{"Field": a, "Value": text(b)} for a, b in rows]), hide_index=True, width="stretch")
+def show_table(
+    rows: Iterable[tuple[str, Any]],
+    caption: str = "",
+) -> None:
+    """Render a two-column Field/Value table."""
+
+    prepared_rows = [
+        (label, value)
+        for label, value in rows
+        if value not in (None, "")
+    ]
+
+    if not prepared_rows:
+        return
+
+    if caption:
+        st.markdown(f"**{caption}**")
+
+    frame = pd.DataFrame(
+        [
+            {
+                "Field": label,
+                "Value": display_text(value),
+            }
+            for label, value in prepared_rows
+        ]
+    )
+
+    st.dataframe(
+        frame,
+        hide_index=True,
+        width="stretch",
+    )
 
 
-def flatten_rows(data: Dict[str, Any], excluded=None):
-    excluded = excluded or set()
-    rows = []
+def flatten_rows(
+    data: Dict[str, Any],
+    excluded: set[str] | None = None,
+) -> list[tuple[str, Any]]:
+    """Convert a dictionary into readable rows without dropping nested data."""
+
+    excluded_keys = excluded or set()
+    rows: list[tuple[str, Any]] = []
+
     for key, value in data.items():
-        if key in excluded or value in (None, ""): continue
+        if key in excluded_keys or value in (None, ""):
+            continue
+
         if isinstance(value, (dict, list)):
-            value = json.dumps(value, default=str)
-        rows.append((key.replace("_", " ").capitalize(), value))
+            value = json.dumps(
+                value,
+                ensure_ascii=False,
+                default=str,
+            )
+
+        rows.append(
+            (
+                key.replace("_", " ").capitalize(),
+                value,
+            )
+        )
+
     return rows
 
 
-def register_secret(response: Dict[str, Any]) -> None:
+def redact_sensitive_history(value: Any) -> Any:
+    """Remove plaintext credentials from conversation history and downloads."""
+
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+
+        for key, item in value.items():
+            normalized_key = key.strip().casefold()
+
+            if normalized_key in SENSITIVE_HISTORY_KEYS:
+                if normalized_key != "_dashboard_secret":
+                    cleaned[key] = "[redacted]"
+                continue
+
+            cleaned[key] = redact_sensitive_history(item)
+
+        return cleaned
+
+    if isinstance(value, list):
+        return [redact_sensitive_history(item) for item in value]
+
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Temporary-password dashboard
+# ---------------------------------------------------------------------------
+
+
+def register_dashboard_secret(response: Dict[str, Any]) -> bool:
+    """
+    Move `_dashboard_secret` from the response into current session state.
+
+    FlowService must create `_dashboard_secret` before returning the response.
+    This function removes that field before the response is added to normal
+    conversation history or shown as raw JSON.
+    """
+
     secret = response.pop("_dashboard_secret", None)
-    if not isinstance(secret, dict) or not secret.get("password"): return
-    st.session_state.password_cards.insert(0, {
-        **secret,
+
+    if not isinstance(secret, dict):
+        return False
+
+    password = secret.get("password")
+
+    if (
+        not isinstance(password, str)
+        or not password
+        or password.casefold() == "[redacted]"
+    ):
+        return False
+
+    password_card = {
+        "password": password,
+        "user": secret.get("user") or "Unknown user",
+        "backend": secret.get("backend") or "unknown",
+        "operation_id": secret.get("operation_id"),
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    })
+    }
+
+    st.session_state.password_cards.insert(0, password_card)
+    return True
 
 
-def render_passwords() -> None:
-    if not st.session_state.password_cards: return
+def render_password_cards() -> None:
+    """Display generated temporary passwords during the current UI session."""
+
+    cards = st.session_state.password_cards
+
+    if not cards:
+        return
+
     st.markdown("### Generated temporary passwords")
-    for index, card in enumerate(list(st.session_state.password_cards)):
+
+    for index, card in enumerate(list(cards)):
         with st.container(border=True):
-            table([
-                ("Account", card.get("user")), ("Backend", card.get("backend")),
-                ("Generated", card.get("created_at")), ("Operation ID", card.get("operation_id")),
-            ])
-            st.code(card.get("password", ""), language=None)
-            if st.button("Remove password", key=f"remove_password_{index}"):
+            show_table(
+                [
+                    ("Account", card.get("user")),
+                    ("Backend", card.get("backend")),
+                    ("Generated", card.get("created_at")),
+                    ("Operation ID", card.get("operation_id")),
+                ]
+            )
+
+            st.markdown("**Temporary password**")
+            st.code(
+                card.get("password") or "",
+                language=None,
+            )
+
+            if st.button(
+                "Remove password",
+                key=f"remove_password_{index}",
+                width="content",
+            ):
                 st.session_state.password_cards.pop(index)
                 st.rerun()
 
+    if st.button(
+        "Clear displayed passwords",
+        type="secondary",
+        width="content",
+    ):
+        st.session_state.password_cards = []
+        st.rerun()
+
+    st.divider()
+
+
+# ---------------------------------------------------------------------------
+# Workflow result rendering
+# ---------------------------------------------------------------------------
+
+
+def render_script_execution(execution: Dict[str, Any]) -> None:
+    """Render PowerShell execution evidence."""
+
+    show_table(
+        [
+            ("Success", execution.get("success")),
+            ("Operation", execution.get("operation")),
+            ("Script", execution.get("script_name")),
+            ("Exit code", execution.get("exit_code")),
+            ("Duration seconds", execution.get("duration_seconds")),
+            ("Dry run", execution.get("dry_run")),
+            ("Standard output", execution.get("stdout")),
+            ("Standard error", execution.get("stderr")),
+            ("Error", execution.get("error")),
+        ],
+        "Script execution",
+    )
+
+
+def render_guardrails(response: Dict[str, Any]) -> None:
+    """Render guardrail decisions and violations as tables."""
+
+    show_table(
+        [
+            ("Action", response.get("guardrail_action")),
+            ("Blocked", response.get("guardrail_blocked")),
+            ("Confirmation required", response.get("confirmation_required")),
+            ("Confirmation prompt", response.get("confirmation_prompt")),
+            ("Output filtered fields", response.get("guardrails_output_filtered")),
+        ],
+        "Guardrails",
+    )
+
+    violations = response.get("guardrail_violations")
+
+    if not isinstance(violations, list):
+        return
+
+    for index, violation in enumerate(violations, start=1):
+        if isinstance(violation, dict):
+            show_table(
+                flatten_rows(violation),
+                f"Guardrail violation {index}",
+            )
+
+
+def render_result(intent: str, result: Dict[str, Any]) -> None:
+    """Render API or script operation results."""
+
+    execution = result.get("execution")
+    user_record = result.get("user")
+
+    excluded = {
+        "execution",
+        "user",
+        "new_password",
+        "temporary_password",
+    }
+
+    if isinstance(user_record, dict):
+        result_rows = [("Backend", result.get("backend"))]
+        result_rows.extend(flatten_rows(user_record))
+    else:
+        result_rows = flatten_rows(result, excluded)
+
+    show_table(result_rows, "Result")
+
+    if isinstance(execution, dict):
+        render_script_execution(execution)
+
+    if intent == "password_reset":
+        redacted_value = (
+            result.get("new_password")
+            or result.get("temporary_password")
+        )
+
+        if redacted_value == "[redacted]":
+            show_table(
+                [
+                    (
+                        "Password display",
+                        (
+                            "The normal response is redacted. The generated "
+                            "password appears in the dashboard panel only when "
+                            "FlowService receives the original value before "
+                            "output sanitization."
+                        ),
+                    )
+                ],
+                "Password status",
+            )
+
 
 def render_response(response: Dict[str, Any]) -> None:
+    """Render workflow data without success/error notification boxes."""
+
     confidence = response.get("confidence")
-    table([
-        ("Succeeded", response.get("success")), ("Intent", response.get("intent")),
-        ("Confidence", f"{confidence:.0%}" if isinstance(confidence, (int, float)) else None),
-        ("Request ID", response.get("request_id")), ("Correlation ID", response.get("correlation_id")),
-        ("Explanation", response.get("explanation")), ("Message", response.get("message")),
-        ("Error", response.get("error")),
-    ], "Summary")
-    table(flatten_rows(response.get("metadata") or {}), "Extracted metadata")
-    table([
-        ("Action", response.get("guardrail_action")), ("Blocked", response.get("guardrail_blocked")),
-        ("Confirmation required", response.get("confirmation_required")),
-        ("Confirmation prompt", response.get("confirmation_prompt")),
-    ], "Guardrails")
-    for i, violation in enumerate(response.get("guardrail_violations") or [], 1):
-        if isinstance(violation, dict):
-            table(flatten_rows(violation), f"Guardrail violation {i}")
-    table([
-        ("Agent", response.get("selected_agent")), ("MCP server", response.get("selected_mcp_server")),
-        ("MCP tool", response.get("selected_mcp_tool")), ("Application tool", response.get("selected_tool")),
-    ], "Routing")
-    context = response.get("execution_context") or {}
-    table(flatten_rows(context), "Execution context")
-    tool = response.get("tool_result") or {}
-    if isinstance(tool, dict) and tool:
-        table([
-            ("Tool name", tool.get("tool_name")), ("Status", tool.get("status")),
-            ("Operation ID", tool.get("operation_id")), ("Succeeded", tool.get("success")),
-            ("Message", tool.get("message")), ("Error", tool.get("error")),
-        ], "Tool execution")
-        result = tool.get("result")
+
+    show_table(
+        [
+            ("Succeeded", response.get("success")),
+            ("Intent", response.get("intent")),
+            (
+                "Confidence",
+                (
+                    f"{confidence:.0%}"
+                    if isinstance(confidence, (int, float))
+                    else None
+                ),
+            ),
+            ("Request ID", response.get("request_id")),
+            ("Correlation ID", response.get("correlation_id")),
+            ("Explanation", response.get("explanation")),
+            ("Message", response.get("message")),
+            ("Error", response.get("error")),
+        ],
+        "Summary",
+    )
+
+    metadata = response.get("metadata")
+
+    if isinstance(metadata, dict):
+        show_table(
+            flatten_rows(metadata),
+            "Extracted metadata",
+        )
+
+    render_guardrails(response)
+
+    show_table(
+        [
+            ("Agent", response.get("selected_agent")),
+            ("MCP server", response.get("selected_mcp_server")),
+            ("MCP tool", response.get("selected_mcp_tool")),
+            ("Application tool", response.get("selected_tool")),
+        ],
+        "Routing",
+    )
+
+    execution_context = response.get("execution_context")
+
+    if isinstance(execution_context, dict):
+        show_table(
+            flatten_rows(execution_context),
+            "Execution context",
+        )
+
+    tool_result = response.get("tool_result")
+
+    if isinstance(tool_result, dict) and tool_result:
+        show_table(
+            [
+                ("Tool name", tool_result.get("tool_name")),
+                ("Status", tool_result.get("status")),
+                ("Operation ID", tool_result.get("operation_id")),
+                ("Succeeded", tool_result.get("success")),
+                ("Message", tool_result.get("message")),
+                ("Error", tool_result.get("error")),
+                ("API integration pending", tool_result.get("api_integration_pending")),
+            ],
+            "Tool execution",
+        )
+
+        result = tool_result.get("result")
+
         if isinstance(result, dict):
-            execution = result.get("execution")
-            user = result.get("user")
-            table(flatten_rows(user if isinstance(user, dict) else result, {"execution", "user", "new_password", "temporary_password"}), "Result")
-            if isinstance(execution, dict):
-                table(flatten_rows(execution), "Script execution")
+            render_result(
+                response.get("intent") or "",
+                result,
+            )
+
     with st.expander("Raw response (JSON)"):
         st.json(response)
 
 
-def set_pending(response: Dict[str, Any], query: str) -> None:
+# ---------------------------------------------------------------------------
+# Confirmation workflow
+# ---------------------------------------------------------------------------
+
+
+def set_pending_confirmation(
+    response: Dict[str, Any],
+    query: str,
+) -> None:
+    """Store a request while guardrails wait for operator confirmation."""
+
     if response.get("confirmation_required"):
         st.session_state.pending_confirmation = {
             "query": query,
             "request_id": response.get("request_id"),
             "correlation_id": response.get("correlation_id"),
+            "intent": response.get("intent"),
             "prompt": response.get("confirmation_prompt"),
         }
     else:
         st.session_state.pending_confirmation = None
 
 
-def run_query(query: str, *, confirmed=False, request_id=None, correlation_id=None, add_user=True) -> None:
-    stamp = datetime.now().strftime("%H:%M:%S")
-    if add_user:
-        with st.chat_message("user"): st.write(query)
-        st.session_state.conversation.append({"role": "user", "content": query, "time": stamp})
+def append_conversation(
+    role: str,
+    content: Any,
+    timestamp: str,
+) -> None:
+    """Append a password-safe conversation item."""
+
+    st.session_state.conversation.append(
+        {
+            "role": role,
+            "content": redact_sensitive_history(
+                copy.deepcopy(content)
+            ),
+            "time": timestamp,
+        }
+    )
+
+
+def execute_and_render(
+    query: str,
+    *,
+    confirmed: bool = False,
+    request_id: str | None = None,
+    correlation_id: str | None = None,
+    add_user_turn: bool = True,
+) -> Dict[str, Any]:
+    """Execute one workflow request and save the password-safe result."""
+
+    timestamp = datetime.now().strftime("%H:%M:%S")
+
+    if add_user_turn:
+        with st.chat_message("user"):
+            st.write(query)
+
+        append_conversation(
+            "user",
+            query,
+            timestamp,
+        )
+
     with st.chat_message("assistant"):
         with st.spinner("Checking and running the operation..."):
-            response = get_service().run_query(query, confirmed=confirmed, request_id=request_id, correlation_id=correlation_id)
-        register_secret(response)
+            response = get_service().run_query(
+                query,
+                confirmed=confirmed,
+                request_id=request_id,
+                correlation_id=correlation_id,
+            )
+
+        register_dashboard_secret(response)
         render_response(response)
-    st.session_state.conversation.append({"role": "assistant", "content": response, "time": stamp})
-    set_pending(response, query)
+
+    append_conversation(
+        "assistant",
+        response,
+        timestamp,
+    )
+
+    set_pending_confirmation(response, query)
+    return response
 
 
-def render_confirmation() -> None:
+def cancel_pending_confirmation() -> None:
+    """Cancel the pending operation without running the tool."""
+
     pending = st.session_state.pending_confirmation
-    if not isinstance(pending, dict): return
+    st.session_state.pending_confirmation = None
+
+    response = {
+        "success": False,
+        "cancelled": True,
+        "request_id": (
+            pending.get("request_id")
+            if isinstance(pending, dict)
+            else None
+        ),
+        "correlation_id": (
+            pending.get("correlation_id")
+            if isinstance(pending, dict)
+            else None
+        ),
+        "intent": (
+            pending.get("intent")
+            if isinstance(pending, dict)
+            else None
+        ),
+        "message": "Operation cancelled. No changes were made.",
+        "error": None,
+    }
+
+    append_conversation(
+        "assistant",
+        response,
+        datetime.now().strftime("%H:%M:%S"),
+    )
+
+    st.rerun()
+
+
+def render_confirmation_controls() -> None:
+    """Render trusted confirmation controls for a pending operation."""
+
+    pending = st.session_state.pending_confirmation
+
+    if not isinstance(pending, dict):
+        return
+
     with st.container(border=True):
         st.markdown("**Approval required**")
-        st.write(pending.get("prompt") or "Confirm this operation before continuing.")
-        left, right = st.columns(2)
-        if left.button("Confirm and proceed", type="primary", width="stretch"):
+        st.write(
+            pending.get("prompt")
+            or "Confirm this operation before continuing."
+        )
+
+        confirm_column, cancel_column = st.columns(2)
+
+        if confirm_column.button(
+            "Confirm and proceed",
+            type="primary",
+            width="stretch",
+        ):
             st.session_state.pending_confirmation = None
-            run_query(pending["query"], confirmed=True, request_id=pending.get("request_id"), correlation_id=pending.get("correlation_id"), add_user=False)
+
+            execute_and_render(
+                pending["query"],
+                confirmed=True,
+                request_id=pending.get("request_id"),
+                correlation_id=pending.get("correlation_id"),
+                add_user_turn=False,
+            )
+
             st.rerun()
-        if right.button("Cancel", width="stretch"):
-            st.session_state.pending_confirmation = None
-            st.rerun()
+
+        if cancel_column.button(
+            "Cancel",
+            width="stretch",
+        ):
+            cancel_pending_confirmation()
+
+
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
+
+
+def safe_conversation_download() -> str:
+    """Serialize password-safe conversation history."""
+
+    return json.dumps(
+        redact_sensitive_history(
+            copy.deepcopy(st.session_state.conversation)
+        ),
+        indent=2,
+        ensure_ascii=False,
+        default=str,
+    )
 
 
 def render_sidebar() -> None:
+    """Render environment, examples, and session controls."""
+
     with st.sidebar:
         st.header("Environment")
+
         status = get_config_status()
-        table(flatten_rows(status))
-        if st.button("Test Ollama connection", width="stretch"):
-            ok, message = check_ollama()
-            st.session_state.ollama_check_result = {"connected": ok, "message": message}
-        if st.session_state.ollama_check_result:
-            table(flatten_rows(st.session_state.ollama_check_result))
+        show_table(flatten_rows(status))
+
+        if st.button(
+            "Test Ollama connection",
+            width="stretch",
+        ):
+            connected, message = check_ollama()
+            st.session_state.ollama_check_result = {
+                "connected": connected,
+                "message": message,
+            }
+
+        ollama_result = st.session_state.ollama_check_result
+
+        if isinstance(ollama_result, dict):
+            show_table(flatten_rows(ollama_result))
+
         st.divider()
-        for example in EXAMPLES:
-            if st.button(example, key=example, width="stretch"):
+        st.caption("Example queries")
+
+        for index, example in enumerate(EXAMPLES):
+            if st.button(
+                example,
+                key=f"example_{index}",
+                width="stretch",
+            ):
                 st.session_state.queued_query = example
                 st.rerun()
+
+        st.divider()
         st.caption(f"Logs: {LOG_FILE}")
+
         if st.session_state.conversation:
-            if st.button("Clear conversation", width="stretch"):
+            if st.button(
+                "Clear conversation",
+                width="stretch",
+            ):
                 st.session_state.conversation = []
                 st.session_state.pending_confirmation = None
                 st.rerun()
-            st.download_button("Download as JSON", json.dumps(copy.deepcopy(st.session_state.conversation), indent=2, default=str), "techadmin_session.json", "application/json", width="stretch")
+
+            st.download_button(
+                "Download as JSON",
+                data=safe_conversation_download(),
+                file_name="techadmin_session.json",
+                mime="application/json",
+                width="stretch",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Main application
+# ---------------------------------------------------------------------------
 
 
 def main() -> None:
+    """Run the TechAdmin Streamlit application."""
+
     init_state()
+
     st.title("🛠️ TechAdmin IT Support")
-    st.caption("Guardrailed identity operations through Microsoft Graph and PowerShell.")
-    render_passwords()
+    st.caption(
+        "Guardrailed identity operations through Microsoft Graph and PowerShell."
+    )
+
+    render_password_cards()
+
     for turn in st.session_state.conversation:
         with st.chat_message(turn["role"]):
-            if turn["role"] == "user": st.write(turn["content"])
-            elif isinstance(turn["content"], dict): render_response(turn["content"])
+            if turn["role"] == "user":
+                st.write(turn["content"])
+            elif isinstance(turn["content"], dict):
+                render_response(turn["content"])
 
-    query = st.session_state.queued_query or st.chat_input("Type an identity operation...")
+    query = (
+        st.session_state.queued_query
+        or st.chat_input("Type an identity operation...")
+    )
+
     st.session_state.queued_query = None
+
     if query:
         pending = st.session_state.pending_confirmation
-        answer = query.strip().casefold().rstrip(".!")
-        if isinstance(pending, dict) and answer in YES_WORDS:
+        normalized_answer = query.strip().casefold().rstrip(".!")
+
+        if isinstance(pending, dict) and normalized_answer in YES_WORDS:
+            append_conversation(
+                "user",
+                query,
+                datetime.now().strftime("%H:%M:%S"),
+            )
+
             st.session_state.pending_confirmation = None
-            run_query(pending["query"], confirmed=True, request_id=pending.get("request_id"), correlation_id=pending.get("correlation_id"), add_user=False)
-        elif isinstance(pending, dict) and answer in NO_WORDS:
-            st.session_state.pending_confirmation = None
+
+            execute_and_render(
+                pending["query"],
+                confirmed=True,
+                request_id=pending.get("request_id"),
+                correlation_id=pending.get("correlation_id"),
+                add_user_turn=False,
+            )
+
+        elif isinstance(pending, dict) and normalized_answer in NO_WORDS:
+            append_conversation(
+                "user",
+                query,
+                datetime.now().strftime("%H:%M:%S"),
+            )
+            cancel_pending_confirmation()
+
         else:
-            run_query(query)
+            execute_and_render(query)
+
         st.rerun()
 
-    render_confirmation()
+    render_confirmation_controls()
     render_sidebar()
 
 
