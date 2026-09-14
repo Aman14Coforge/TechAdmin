@@ -131,14 +131,42 @@ class UnifiedIntentMetadataExtractor:
             r"\bgrant\s+(?:user\s+)?\S+\s+access\s+to\s+(?:group\s+)?\S+",
             r"\bgrant\s+access\s+to\s+\S+\s+(?:in|through|via)\s+(?:group\s+)?\S+",
         ),
-        IntentType.REVOKE_ACCESS: (
-            r"\bremove\s+(?:existing\s+)?(?:ad\s+)?user\s+.+?\s+from\s+(?:the\s+)?(?:existing\s+)?(?:ad\s+)?group\s+\S+",
-            r"\bremove\s+\S+\s+from\s+(?:the\s+)?(?:ad\s+)?group\s+\S+",
-            r"\bremove\s+\S+\s+from\s+\S+\s+group\b",
-            r"\brevoke\s+(?:user\s+)?\S+\s+access\s+(?:to|from)\s+(?:group\s+)?\S+",
-            r"\brevoke\s+access\s+(?:for|from)\s+\S+\s+(?:in|through|via)\s+(?:group\s+)?\S+",
+        IntentType.GRANT_ACCESS: (
+        (
+            r"\badd\s+(?:the\s+)?(?:existing\s+)?"
+            r"(?:ad\s+)?user\s+.+?\s+to\s+"
+            r"(?:the\s+)?(?:existing\s+)?"
+            r"(?:ad\s+)?group\s+\S+"
         ),
-        IntentType.CREATE_GROUP: (
+        (
+            r"\badd\s+\S+\s+to\s+"
+            r"(?:the\s+)?(?:ad\s+)?group\s+\S+"
+        ),
+        (
+            r"\bgrant\s+(?:the\s+)?(?:user\s+)?"
+            r"\S+\s+access\s+to\s+"
+            r"(?:the\s+)?(?:group\s+)?\S+"
+        ),
+    ),
+
+    IntentType.REVOKE_ACCESS: (
+        (
+            r"\bremove\s+(?:the\s+)?(?:existing\s+)?"
+            r"(?:ad\s+)?user\s+.+?\s+from\s+"
+            r"(?:the\s+)?(?:existing\s+)?"
+            r"(?:ad\s+)?group\s+\S+"
+        ),
+        (
+            r"\bremove\s+\S+\s+from\s+"
+            r"(?:the\s+)?(?:ad\s+)?group\s+\S+"
+        ),
+        (
+            r"\brevoke\s+(?:the\s+)?(?:user\s+)?"
+            r"\S+\s+access\s+(?:to|from)\s+"
+            r"(?:the\s+)?(?:group\s+)?\S+"
+        ),
+    ),
+         IntentType.CREATE_GROUP: (
             r"\bcreate\s+(?:a\s+|an\s+)?(?:new\s+)?(?:ad\s+)?(?:security\s+)?group\b",
             r"\bnew\s+(?:ad\s+)?(?:security\s+)?group\b",
             r"\bprovision\s+(?:a\s+|an\s+)?(?:new\s+)?(?:ad\s+)?group\b",
@@ -174,10 +202,16 @@ class UnifiedIntentMetadataExtractor:
 
     MEMBERSHIP_PATTERN = re.compile(
         r"\b(?P<verb>add|remove)\s+"
-        r"(?:existing\s+)?(?:ad\s+)?(?:user\s+)?"
+        r"(?:the\s+)?"
+        r"(?:existing\s+)?"
+        r"(?:ad\s+)?"
+        r"(?:user\s+)?"
         r"(?P<user>[^\s,]+)\s+"
         r"(?P<direction>to|from)\s+"
-        r"(?:the\s+)?(?:existing\s+)?(?:ad\s+)?(?:group\s+)?"
+        r"(?:the\s+)?"
+        r"(?:existing\s+)?"
+        r"(?:ad\s+)?"
+        r"(?:group\s+)?"
         r"(?P<group>[^\s,.;]+)",
         flags=re.IGNORECASE,
     )
