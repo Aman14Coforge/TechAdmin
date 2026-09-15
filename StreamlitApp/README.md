@@ -28,6 +28,12 @@ TechAdmin/
 Nothing else in the project changes, apart from `streamlit` being added to
 `requirements.txt`.
 
+Microsoft Entra SSO is enabled through `.streamlit/secrets.toml`. The optional
+local test-account login is disabled by default. For local-only testing, set
+`TECHADMIN_LOCAL_LOGIN_ENABLED=true`, `TECHADMIN_LOCAL_LOGIN_USERNAME`, and
+`TECHADMIN_LOCAL_LOGIN_PASSWORD` in the process environment. Never commit the
+password or enable this fallback in a shared or production deployment.
+
 ## Running
 
 From the **project root**, not from inside `StreamlitApp/`:

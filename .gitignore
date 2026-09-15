@@ -50,6 +50,12 @@ Thumbs.db
 .env.local
 .env.*.local
 
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Local branding assets
+logo/
+
 # Testing & Coverage
 .pytest_cache/
 .coverage
