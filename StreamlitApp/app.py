@@ -1743,7 +1743,10 @@ Run from the project root:
 from __future__ import annotations
 
 import copy
+import html
+import hmac
 import json
+import os
 from datetime import datetime
 from typing import Any, Dict, Iterable
 
@@ -1771,10 +1774,275 @@ from flow_service import (
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="TechAdmin IT Support",
+    page_title="TechAdmin",
     page_icon="🛠️",
-    layout="centered",
+    layout="wide",
 )
+
+st.markdown(
+    """
+    <style>
+    :root {
+        --tech-ink: #18212f;
+        --tech-muted: #667085;
+        --tech-blue: #1769aa;
+        --tech-blue-soft: #eaf4fb;
+        --tech-line: #d9e2ec;
+        --tech-warm: #f7f4ee;
+    }
+
+    [data-testid="stSidebar"] {
+        border-right: 1px solid var(--tech-line);
+    }
+
+    [data-testid="stSidebar"] > div:first-child {
+        padding-top: 2rem;
+    }
+
+    .tech-hero {
+        padding: 1rem 0 1.25rem;
+        border-bottom: 1px solid var(--tech-line);
+        margin-bottom: 1.5rem;
+        text-align: left;
+    }
+
+    .sidebar-brand {
+        border-bottom: 1px solid var(--tech-line);
+        margin: 0 0 1.5rem;
+        padding: 0 0 1.25rem;
+    }
+
+    .sidebar-brand .tech-kicker {
+        font-size: 0.72rem;
+        line-height: 1.4;
+    }
+
+    .sidebar-brand .company-name {
+        color: #0d4f87;
+        font-size: 1.25rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .sidebar-brand h1 {
+        color: var(--tech-ink);
+        font-size: 1.8rem;
+        line-height: 1;
+        margin: 0.45rem 0 0;
+    }
+
+    .tech-kicker {
+        color: var(--tech-blue);
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        margin-bottom: 0.5rem;
+        text-align: left;
+    }
+
+    .tech-brand {
+        color: #0d4f87;
+        font-size: 1rem;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        margin-left: 0.35rem;
+    }
+
+    .tech-hero h1 {
+        color: var(--tech-ink);
+        font-size: clamp(2rem, 4vw, 3.4rem);
+        line-height: 1.05;
+        margin: 0;
+    }
+
+    .tech-hero p {
+        color: var(--tech-muted);
+        font-size: 1rem;
+        margin: 0.85rem 0 0;
+    }
+
+    .tech-panel {
+        background: linear-gradient(135deg, var(--tech-blue-soft), #fff);
+        border: 1px solid #cfe3f2;
+        border-radius: 0.75rem;
+        padding: 1.25rem 1.35rem;
+        margin: 0.5rem 0 1.25rem;
+    }
+
+    .tech-panel strong {
+        color: var(--tech-ink);
+        display: block;
+        font-size: 1.05rem;
+        margin-bottom: 0.3rem;
+    }
+
+    .tech-panel span {
+        color: var(--tech-muted);
+    }
+
+    div[data-testid="stChatInput"] {
+        margin-top: 1rem;
+    }
+
+    .operation-card {
+        border: 1px solid var(--tech-line);
+        border-left: 4px solid var(--tech-blue);
+        border-radius: 0.55rem;
+        padding: 1rem 1.15rem;
+        margin: 1rem 0 1.25rem;
+        background: #fff;
+    }
+
+    .operation-card.success { border-left-color: #18864b; }
+    .operation-card.warning { border-left-color: #b7791f; }
+    .operation-card.failure { border-left-color: #c53030; }
+
+    .operation-label {
+        color: var(--tech-muted);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .operation-title {
+        color: var(--tech-ink);
+        font-size: 1.2rem;
+        font-weight: 700;
+        margin-top: 0.25rem;
+    }
+
+    .operation-meta {
+        color: var(--tech-muted);
+        margin-top: 0.45rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def require_authentication() -> dict[str, Any]:
+    """Require a Microsoft Entra session before loading the dashboard."""
+
+    local_user = st.session_state.get("local_authenticated_user")
+    if isinstance(local_user, dict):
+        render_authenticated_user(local_user)
+        return local_user
+
+    if not st.user.is_logged_in:
+        st.title("TechAdmin")
+        st.subheader("Sign in to TechAdmin")
+
+        microsoft_tab, local_tab = st.tabs(
+            ["Microsoft SSO", "Test account"]
+        )
+
+        with microsoft_tab:
+            st.write("Use your Coforge Microsoft account.")
+            if st.button(
+                "Sign in with Microsoft",
+                type="primary",
+                width="stretch",
+            ):
+                st.login()
+
+        with local_tab:
+            render_local_login()
+
+        st.stop()
+
+    claims = dict(st.user)
+    expected_tenant = str(
+        st.secrets.get("entra", {}).get("allowed_tenant_id", "")
+    ).strip()
+    actual_tenant = str(claims.get("tid", "")).strip()
+
+    if expected_tenant and actual_tenant != expected_tenant:
+        st.error("This Microsoft tenant is not authorized for TechAdmin.")
+        if st.button("Sign out", width="content"):
+            st.logout()
+        st.stop()
+
+    render_authenticated_user(claims)
+
+    return claims
+
+
+def render_local_login() -> None:
+    """Authenticate the explicitly configured local development account."""
+
+    if os.getenv("TECHADMIN_LOCAL_LOGIN_ENABLED", "false").casefold() != "true":
+        st.info("The local test account is disabled.")
+        return
+
+    with st.form("local_login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button(
+            "Sign in",
+            type="primary",
+            width="stretch",
+        )
+
+    if not submitted:
+        return
+
+    expected_username = os.getenv(
+        "TECHADMIN_LOCAL_LOGIN_USERNAME",
+        "TechAdminTestUser",
+    )
+    expected_password = os.getenv("TECHADMIN_LOCAL_LOGIN_PASSWORD", "")
+
+    valid_username = hmac.compare_digest(
+        username.strip().casefold(),
+        expected_username.strip().casefold(),
+    )
+    valid_password = bool(expected_password) and hmac.compare_digest(
+        password,
+        expected_password,
+    )
+
+    if not (valid_username and valid_password):
+        st.error("Invalid username or password.")
+        return
+
+    st.session_state.local_authenticated_user = {
+        "name": expected_username,
+        "preferred_username": expected_username,
+        "auth_source": "local_test_account",
+    }
+    st.rerun()
+
+
+def render_authenticated_user(claims: dict[str, Any]) -> None:
+    """Render identity and provide a logout action for either auth method."""
+
+    with st.sidebar:
+        st.markdown(
+            """
+            <div class="sidebar-brand">
+                <div class="company-name">Coforge</div>
+                <h1>TechAdmin</h1>
+                <div class="tech-kicker">IT Operations</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        display_name = (
+            claims.get("name")
+            or claims.get("preferred_username")
+            or "Authenticated user"
+        )
+        st.caption(f"Signed in as {display_name}")
+        if claims.get("auth_source") == "local_test_account":
+            if st.button("Sign out", key="local_sign_out", width="stretch"):
+                st.session_state.pop("local_authenticated_user", None)
+                st.rerun()
+        elif st.button("Sign out", key="sign_out", width="stretch"):
+            st.logout()
 
 
 EXAMPLES = [
@@ -2264,6 +2532,7 @@ def render_result(intent: str, result: Dict[str, Any]) -> None:
 def render_response(response: Dict[str, Any]) -> None:
     """Render workflow data without success/error notification boxes."""
 
+    render_operation_summary(response)
     confidence = response.get("confidence")
 
     show_table(
@@ -2341,6 +2610,68 @@ def render_response(response: Dict[str, Any]) -> None:
 
     with st.expander("Raw response (JSON)"):
         st.json(response)
+
+
+def render_operation_summary(response: Dict[str, Any]) -> None:
+    """Show the key operation state before detailed result tables."""
+
+    intent = str(response.get("intent") or "Identity operation")
+    title = intent.replace("_", " ").title()
+    metadata = response.get("metadata")
+    target = "Unknown target"
+
+    if isinstance(metadata, dict):
+        target = (
+            metadata.get("email")
+            or metadata.get("username")
+            or metadata.get("user_id")
+            or target
+        )
+
+    if response.get("confirmation_required"):
+        status = "Confirmation required"
+        status_class = "warning"
+    elif response.get("success") is True:
+        status = "Completed"
+        status_class = "success"
+    elif response.get("success") is False:
+        status = "Failed"
+        status_class = "failure"
+    else:
+        status = "Submitted"
+        status_class = ""
+
+    safe_title = html.escape(title)
+    safe_target = html.escape(str(target))
+    safe_status = html.escape(status)
+
+    st.markdown(
+        f"""
+        <div class="operation-card {status_class}">
+            <div class="operation-label">Current operation</div>
+            <div class="operation-title">{safe_title}</div>
+            <div class="operation-meta"><strong>Target:</strong> {safe_target} &nbsp; | &nbsp; <strong>Status:</strong> {safe_status}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    timeline = [
+        ("Request received", True),
+        ("Request analyzed", True),
+        ("Target validated", not bool(response.get("error"))),
+    ]
+
+    if response.get("confirmation_required"):
+        timeline.append(("Confirmation required", True))
+    else:
+        timeline.append(("Operation completed", response.get("success") is True))
+
+    st.markdown("**Operation timeline**")
+    st.caption("  ·  ".join(
+        f"{'✓' if complete else '○'} {label}"
+        for label, complete in timeline
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -2528,10 +2859,17 @@ def render_sidebar() -> None:
     """Render environment, examples, and session controls."""
 
     with st.sidebar:
-        st.header("Environment")
+        st.header("System status")
 
         status = get_config_status()
-        show_table(flatten_rows(status))
+        show_table(
+            [
+                ("Microsoft Graph", "Configured" if status.get("graph_client_id") and status.get("graph_client_secret") and status.get("graph_tenant_id") else "Incomplete"),
+                ("PowerShell", "Enabled" if status.get("powershell_operations_enabled") else "Disabled"),
+                ("Destructive actions", "Enabled" if status.get("destructive_operations_enabled") else "Disabled"),
+                ("Configuration", "Valid" if status.get("config_valid") else "Invalid"),
+            ]
+        )
 
         if st.button(
             "Test Ollama connection",
@@ -2546,19 +2884,34 @@ def render_sidebar() -> None:
         ollama_result = st.session_state.ollama_check_result
 
         if isinstance(ollama_result, dict):
-            show_table(flatten_rows(ollama_result))
+            show_table(
+                [
+                    (
+                        "Ollama",
+                        "Connected" if ollama_result.get("connected") else "Unavailable",
+                    ),
+                ]
+            )
+
+        with st.expander("Environment details"):
+            show_table(
+                flatten_rows(
+                    status,
+                    {
+                        "graph_client_id",
+                        "graph_client_secret",
+                        "graph_tenant_id",
+                        "powershell_operations_enabled",
+                        "destructive_operations_enabled",
+                    },
+                )
+            )
 
         st.divider()
         st.caption("Example queries")
 
-        for index, example in enumerate(EXAMPLES):
-            if st.button(
-                example,
-                key=f"example_{index}",
-                width="stretch",
-            ):
-                st.session_state.queued_query = example
-                st.rerun()
+        for example in EXAMPLES:
+            st.caption(example)
 
         st.divider()
         st.caption(f"Logs: {LOG_FILE}")
@@ -2581,6 +2934,53 @@ def render_sidebar() -> None:
             )
 
 
+def render_recent_operations() -> None:
+    """Show completed session operations without exposing sensitive values."""
+
+    operations = []
+    for turn in reversed(st.session_state.conversation):
+        if turn.get("role") != "assistant" or not isinstance(turn.get("content"), dict):
+            continue
+
+        response = turn["content"]
+        metadata = response.get("metadata")
+        target = "Unknown target"
+        if isinstance(metadata, dict):
+            target = metadata.get("email") or metadata.get("username") or target
+
+        operations.append(
+            {
+                "Operation": str(response.get("intent") or "Identity operation").replace("_", " ").title(),
+                "Target": target,
+                "Status": "Completed" if response.get("success") else "Failed",
+                "Time": turn.get("time", ""),
+            }
+        )
+
+        if len(operations) == 5:
+            break
+
+    if operations:
+        st.markdown("#### Recent operations")
+        st.dataframe(pd.DataFrame(operations), hide_index=True, width="stretch")
+
+
+def render_command_center() -> None:
+    """Render guidance before the conversation has any messages."""
+
+    if st.session_state.conversation:
+        return
+
+    st.markdown(
+        """
+        <div class="tech-panel">
+            <strong>What do you need to take care of?</strong>
+            <span>Ask for a user lookup, password reset, account unlock, or access change. Sensitive actions pause for confirmation.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # ---------------------------------------------------------------------------
 # Main application
 # ---------------------------------------------------------------------------
@@ -2589,12 +2989,10 @@ def render_sidebar() -> None:
 def main() -> None:
     """Run the TechAdmin Streamlit application."""
 
+    require_authentication()
     init_state()
 
-    st.title("🛠️ TechAdmin IT Support")
-    st.caption(
-        "Guardrailed identity operations through Microsoft Graph and PowerShell."
-    )
+    render_command_center()
 
     # CHANGED FOR PASSWORD ENHANCEMENTS (Amit Bhagat): the plaintext password
     # dashboard is gone. The specification forbids the original password on the
@@ -2651,6 +3049,7 @@ def main() -> None:
         st.rerun()
 
     render_confirmation_controls()
+    render_recent_operations()
     render_sidebar()
 
 
