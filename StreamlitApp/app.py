@@ -2046,9 +2046,9 @@ def render_authenticated_user(claims: dict[str, Any]) -> None:
 
 
 EXAMPLES = [
-    "Get user details for Shreesanyog.Rath@Coforge.com",
-    "Get user details for Shreesanyog.Rath@Coforge.com via script",
-    "Get user details for Shreesanyog.Rath@Coforge.com via API",
+    "Get user details for MigrationTest2@Coforge.com",
+    "Get user details for MigrationTest2@Coforge.com via script",
+    "Get user details for MigrationTest2@Coforge.com via API",
     "Reset password for MigrationTest2@Coforge.com",
     "Reset password for MigrationTest2@Coforge.com via script",
     "Add user MigrationTest2@Coforge.com to group TechAI_Group",
