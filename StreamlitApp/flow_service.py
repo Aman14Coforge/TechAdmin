@@ -553,6 +553,7 @@ class FlowService:
         confirmed: bool = False,
         request_id: str | None = None,
         correlation_id: str | None = None,
+        requester_id: str | None = None,
     ) -> Dict[str, Any]:
         """
         Run one user request through DemoFlow.
@@ -572,6 +573,7 @@ class FlowService:
             request_id
             or f"ui_{uuid.uuid4().hex[:8]}"
         )
+        resolved_requester_id = requester_id or self.requester_id
 
         if not normalized_query:
             return {
@@ -593,7 +595,7 @@ class FlowService:
             correlation_id,
             len(normalized_query),
             confirmed,
-            self.requester_id,
+            resolved_requester_id,
             self.requester_role,
             self._windows_identity(),
         )
@@ -607,7 +609,7 @@ class FlowService:
             open_request(
                 request_id=resolved_request_id,
                 user_query=normalized_query,
-                requested_by=self.requester_id,
+                requested_by=resolved_requester_id,
                 source_channel="WEB",
             )
         # --- END ADDED FOR OPERATION AUDIT ---
@@ -618,7 +620,7 @@ class FlowService:
                 request_id=resolved_request_id,
                 correlation_id=correlation_id,
                 confirmed=bool(confirmed),
-                requester_id=self.requester_id,
+                requester_id=resolved_requester_id,
                 requester_role=self.requester_role,
             )
 
@@ -640,7 +642,7 @@ class FlowService:
 
             safe_response["execution_context"] = {
                 "windows_identity": self._windows_identity(),
-                "requester_id": self.requester_id,
+                "requester_id": resolved_requester_id,
                 "requester_role": self.requester_role,
             }
 
@@ -702,7 +704,7 @@ class FlowService:
                 "error": type(exc).__name__,
                 "execution_context": {
                     "windows_identity": self._windows_identity(),
-                    "requester_id": self.requester_id,
+                    "requester_id": resolved_requester_id,
                     "requester_role": self.requester_role,
                 },
             }

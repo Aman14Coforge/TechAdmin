@@ -1187,6 +1187,12 @@ def execute_and_render(
     """Execute one workflow request and save the password-safe result."""
 
     timestamp = datetime.now().strftime("%H:%M:%S")
+    app_user_access = st.session_state.get("app_user_access")
+    requester_id = (
+        app_user_access.get("user_id")
+        if isinstance(app_user_access, dict)
+        else None
+    )
 
     if add_user_turn:
         with st.chat_message("user"):
@@ -1205,6 +1211,7 @@ def execute_and_render(
                 confirmed=confirmed,
                 request_id=request_id,
                 correlation_id=correlation_id,
+                requester_id=requester_id,
             )
 
         register_dashboard_secret(response)
