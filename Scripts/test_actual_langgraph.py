@@ -1,4 +1,4 @@
-"""Smoke test for the actual stage-by-stage TechAdmin LangGraph."""
+"""test for the actual stage-by-stage TechAdmin LangGraph."""
 from __future__ import annotations
 import json, sys
 from pathlib import Path
@@ -22,3 +22,4 @@ print(json.dumps({
     "intent":result.get("intent"),
     "orchestration":result.get("orchestration"),
 },indent=2))
+
