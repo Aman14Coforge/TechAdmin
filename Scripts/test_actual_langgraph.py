@@ -1,4 +1,4 @@
-"""test for the actual stage-by-stage TechAdmin LangGraph."""
+"""test for the TechAdmin LangGraph."""
 from __future__ import annotations
 import json, sys
 from pathlib import Path
