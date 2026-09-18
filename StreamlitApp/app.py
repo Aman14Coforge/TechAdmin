@@ -242,7 +242,10 @@ def enforce_app_user_access(claims: dict[str, Any]) -> None:
         st.session_state.pop("app_user_access", None)
         st.session_state.pop("local_authenticated_user", None)
 
-        if claims.get("auth_source") != "local_test_account":
+        if claims.get("auth_source") not in {
+            "local_test_account",
+            "local_development_mode",
+        }:
             st.logout()
 
         st.rerun()
@@ -250,18 +253,68 @@ def enforce_app_user_access(claims: dict[str, Any]) -> None:
     st.stop()
 
 
+def _environment_enabled(name: str, default: str = "false") -> bool:
+    """Read a boolean environment variable safely."""
+
+    return os.getenv(name, default).strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def require_authentication() -> dict[str, Any]:
-    """Require Microsoft Entra or local-development authentication."""
+    """
+    Resolve the current TechAdmin identity.
 
-    local_user = st.session_state.get("local_authenticated_user")
+    Local development can explicitly bypass the interactive Microsoft login by
+    setting TECHADMIN_LOCAL_MODE=true. This bypass applies only to the login UI.
+    Operation auditing, LangGraph orchestration, guardrails, MCP routing,
+    CrowdStrike reporting, and all other database-backed services remain active.
 
-    if isinstance(local_user, dict):
-        enforce_app_user_access(local_user)
+    Set TECHADMIN_ENFORCE_APP_USERS_LOCAL=true when the configured local account
+    also exists in app_users and local development should exercise that check.
+    """
+
+    # -----------------------------------------------------------------------
+    # Explicit local-development mode
+    # -----------------------------------------------------------------------
+    if _environment_enabled("TECHADMIN_LOCAL_MODE"):
+        local_user = {
+            "name": os.getenv(
+                "TECHADMIN_LOCAL_LOGIN_USERNAME",
+                "TechAdminTestUser",
+            ).strip() or "TechAdminTestUser",
+            "preferred_username": os.getenv(
+                "TECHADMIN_LOCAL_LOGIN_USERNAME",
+                "TechAdminTestUser",
+            ).strip() or "TechAdminTestUser",
+            "auth_source": "local_development_mode",
+        }
+
+        st.session_state.local_authenticated_user = local_user
+
+        if _environment_enabled("TECHADMIN_ENFORCE_APP_USERS_LOCAL"):
+            enforce_app_user_access(local_user)
+
         render_authenticated_user(local_user)
         return local_user
 
     # -----------------------------------------------------------------------
-    # ORIGINAL LOGIN IMPLEMENTATION KEPT COMMENTED AS REQUESTED
+    # Form-based local test-account session
+    # -----------------------------------------------------------------------
+    local_user = st.session_state.get("local_authenticated_user")
+
+    if isinstance(local_user, dict):
+        if _environment_enabled("TECHADMIN_ENFORCE_APP_USERS_LOCAL"):
+            enforce_app_user_access(local_user)
+
+        render_authenticated_user(local_user)
+        return local_user
+
+    # -----------------------------------------------------------------------
+    # ORIGINAL MICROSOFT LOGIN IMPLEMENTATION KEPT COMMENTED FOR REFERENCE
     # -----------------------------------------------------------------------
     # if not st.user.is_logged_in:
     #     st.title("TechAdmin")
@@ -285,19 +338,10 @@ def require_authentication() -> dict[str, Any]:
     #
     #     st.stop()
 
+    # -----------------------------------------------------------------------
+    # Normal Microsoft SSO or form-based local login
+    # -----------------------------------------------------------------------
     if not st.user:
-        if (
-            os.getenv(
-                "TECHADMIN_LOCAL_LOGIN_ENABLED",
-                "false",
-            ).casefold()
-            == "true"
-        ):
-            st.title("TechAdmin")
-            st.subheader("Local Development Login")
-            render_local_login()
-            st.stop()
-
         st.title("TechAdmin")
         st.subheader("Sign in to TechAdmin")
 
@@ -324,30 +368,17 @@ def require_authentication() -> dict[str, Any]:
 
     if not extract_display_name(claims):
         st.title("TechAdmin")
-        st.subheader("Sign in to TechAdmin")
-
-        microsoft_tab, local_tab = st.tabs(
-            ["Microsoft SSO", "Test account"]
+        st.error(
+            "The Microsoft sign-in session did not contain a usable identity."
         )
 
-        with microsoft_tab:
-            st.write("Use your Coforge Microsoft account.")
-
-            if st.button(
-                "Sign in with Microsoft",
-                type="primary",
-                width="stretch",
-            ):
-                st.logout()
-                st.login()
-
-        with local_tab:
-            render_local_login()
+        if st.button("Restart Microsoft sign-in", type="primary"):
+            st.logout()
+            st.login()
 
         st.stop()
 
-    # Tenant restriction remains commented while tenant configuration is
-    # aligned. This preserves the latest supplied application behavior.
+    # Tenant restriction remains commented until production tenant alignment.
     # expected_tenant = str(
     #     st.secrets.get("entra", {}).get("allowed_tenant_id", "")
     # ).strip()
@@ -359,10 +390,10 @@ def require_authentication() -> dict[str, Any]:
     #         st.logout()
     #     st.stop()
 
+    # Production Microsoft sessions always use app_users authorization.
     enforce_app_user_access(claims)
     render_authenticated_user(claims)
     return claims
-
 
 def render_local_login() -> None:
     """Authenticate the explicitly configured local development account."""
@@ -436,7 +467,10 @@ def render_authenticated_user(claims: dict[str, Any]) -> None:
         )
         st.caption(f"Signed in as {display_name}")
 
-        if claims.get("auth_source") == "local_test_account":
+        if claims.get("auth_source") in {
+            "local_test_account",
+            "local_development_mode",
+        }:
             if st.button(
                 "Sign out",
                 key="local_sign_out",
