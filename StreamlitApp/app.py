@@ -263,62 +263,62 @@ def require_authentication() -> dict[str, Any]:
     # -----------------------------------------------------------------------
     # ORIGINAL LOGIN IMPLEMENTATION KEPT COMMENTED AS REQUESTED
     # -----------------------------------------------------------------------
-    if not st.user.is_logged_in:
-        st.title("TechAdmin")
-        st.subheader("Sign in to TechAdmin")
-    
-        microsoft_tab, local_tab = st.tabs(
-            ["Microsoft SSO", "Test account"]
-        )
-    
-        with microsoft_tab:
-            st.write("Use your Coforge Microsoft account.")
-            if st.button(
-                "Sign in with Microsoft",
-                type="primary",
-                width="stretch",
-            ):
-                st.login()
-    
-        with local_tab:
-            render_local_login()
-    
-        st.stop()
-
-    # if not st.user:
-    #     if (
-    #         os.getenv(
-    #             "TECHADMIN_LOCAL_LOGIN_ENABLED",
-    #             "false",
-    #         ).casefold()
-    #         == "true"
-    #     ):
-    #         st.title("TechAdmin")
-    #         st.subheader("Local Development Login")
-    #         render_local_login()
-    #         st.stop()
-
+    # if not st.user.is_logged_in:
     #     st.title("TechAdmin")
     #     st.subheader("Sign in to TechAdmin")
-
+    #
     #     microsoft_tab, local_tab = st.tabs(
     #         ["Microsoft SSO", "Test account"]
     #     )
-
+    #
     #     with microsoft_tab:
     #         st.write("Use your Coforge Microsoft account.")
-
     #         if st.button(
     #             "Sign in with Microsoft",
     #             type="primary",
     #             width="stretch",
     #         ):
     #             st.login()
-
+    #
     #     with local_tab:
     #         render_local_login()
-
+    #
     #     st.stop()
+
+    if not st.user:
+        if (
+            os.getenv(
+                "TECHADMIN_LOCAL_LOGIN_ENABLED",
+                "false",
+            ).casefold()
+            == "true"
+        ):
+            st.title("TechAdmin")
+            st.subheader("Local Development Login")
+            render_local_login()
+            st.stop()
+
+        st.title("TechAdmin")
+        st.subheader("Sign in to TechAdmin")
+
+        microsoft_tab, local_tab = st.tabs(
+            ["Microsoft SSO", "Test account"]
+        )
+
+        with microsoft_tab:
+            st.write("Use your Coforge Microsoft account.")
+
+            if st.button(
+                "Sign in with Microsoft",
+                type="primary",
+                width="stretch",
+            ):
+                st.login()
+
+        with local_tab:
+            render_local_login()
+
+        st.stop()
 
     claims = dict(st.user)
 
