@@ -11,6 +11,9 @@ langchain-ollama
 
 # Data Models
 pydantic
+sqlalchemy
+psycopg[binary]
+pydantic-settings
 
 # Configuration
 python-dotenv
@@ -35,6 +38,7 @@ python-multipart
 # Model Context Protocol
 mcp[cli]>=2.0,<3.0
 
+# Frontend / Auth
 streamlit
 Authlib>=1.3.2
 

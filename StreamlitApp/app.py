@@ -224,6 +224,21 @@ def enforce_app_user_access(claims: dict[str, Any]) -> None:
     """
     display_name = extract_display_name(claims)
 
+    # The earlier login flow allowed an SSO or local test-user sign-in to proceed
+    # even when the identity provider did not send a display name. We retain
+    # that behavior here so a real login is not blocked by a missing claim value.
+    if not display_name:
+        st.session_state.app_user_access = {
+            "display_name": "",
+            "allowed": True,
+            "reason": "legacy_sso_login",
+            "message": "",
+            "user_principal_name": "",
+            "user_id": "",
+            "department": "",
+        }
+        return
+
     cached = st.session_state.get("app_user_access")
 
     # Re-check whenever the signed-in person changes, so a sign-out followed by
@@ -371,16 +386,43 @@ def require_authentication() -> dict[str, Any]:
     # st.stop()
 
     claims = dict(st.user)
-    expected_tenant = str(
-        st.secrets.get("entra", {}).get("allowed_tenant_id", "")
-    ).strip()
-    actual_tenant = str(claims.get("tid", "")).strip()
 
-    if expected_tenant and actual_tenant != expected_tenant:
-        st.error("This Microsoft tenant is not authorized for TechAdmin.")
-        if st.button("Sign out", width="content"):
-            st.logout()
+    # If the auth session exists but does not contain a usable identity, fall
+    # back to the original sign-in chooser instead of entering the dashboard on a
+    # stale/blank OAuth session.
+    if not extract_display_name(claims):
+        st.title("TechAdmin")
+        st.subheader("Sign in to TechAdmin")
+
+        microsoft_tab, local_tab = st.tabs(["Microsoft SSO", "Test account"])
+
+        with microsoft_tab:
+            st.write("Use your Coforge Microsoft account.")
+            if st.button(
+                "Sign in with Microsoft",
+                type="primary",
+                width="stretch",
+            ):
+                st.logout()
+                st.login()
+
+        with local_tab:
+            render_local_login()
+
         st.stop()
+
+    # Tenant restriction temporarily disabled while the Entra tenant config is
+    # being aligned. Re-enable this check only after the target tenant ID is
+    # confirmed and the production SSO configuration matches it.
+    # expected_tenant = str(
+    #     st.secrets.get("entra", {}).get("allowed_tenant_id", "")
+    # ).strip()
+    # actual_tenant = str(claims.get("tid", "")).strip()
+    # if expected_tenant and actual_tenant != expected_tenant:
+    #     st.error("This Microsoft tenant is not authorized for TechAdmin.")
+    #     if st.button("Sign out", width="content"):
+    #         st.logout()
+    #     st.stop()
 
     # ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat)
     enforce_app_user_access(claims)

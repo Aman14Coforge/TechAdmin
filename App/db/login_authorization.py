@@ -74,26 +74,84 @@ MSG_DIRECTORY_UNAVAILABLE = (
 )
 
 
+def _extract_text_values(value: Any) -> list[str]:
+    """Flatten nested claim structures into plain strings."""
+    values: list[str] = []
+
+    if value is None:
+        return values
+
+    if isinstance(value, bool):
+        return values
+
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            values.append(text)
+        return values
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            values.extend(_extract_text_values(item))
+        return values
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            values.extend(_extract_text_values(item))
+        return values
+
+    if isinstance(value, (int, float)):
+        return values
+
+    text = str(value).strip()
+    if text and text.lower() not in {"false", "true", "none", "null"}:
+        values.append(text)
+    return values
+
+
 def extract_display_name(claims: Dict[str, Any]) -> str:
     """
-    Pull the display name out of the sign-in claims.
+    Pull a usable identity name out of the sign-in claims.
 
-    Entra puts the person's full name in "name". The local test account sets
-    the same key, so one function covers both sign-in paths.
-
-    Args:
-        claims: The claims dict from Entra, or from the local test account.
-
-    Returns:
-        The display name, or an empty string when none was supplied.
+    Entra commonly returns the display name in "name", while some flows provide
+    the user principal name or email under other keys. The local test account
+    uses "name" or "preferred_username". We accept common claims and nested
+    structures so a user is not rejected as "no display name" when the
+    provider delivered a valid identity under a different claim shape.
     """
     if not isinstance(claims, dict):
         return ""
 
-    for key in ("name", "display_name", "preferred_username"):
+    for key in (
+        "name",
+        "display_name",
+        "preferred_username",
+        "userPrincipalName",
+        "email",
+        "emails",
+        "upn",
+        "mail",
+        "username",
+        "given_name",
+        "family_name",
+        "displayname",
+    ):
         value = claims.get(key)
-        if value and str(value).strip():
-            return str(value).strip()
+        if value is not None:
+            flattened = _extract_text_values(value)
+            if flattened:
+                return flattened[0]
+
+    # Fallback: search nested structures recursively for any identity value.
+    for value in _extract_text_values(claims):
+        if value:
+            return value
+
+    # Some SSO providers attach boolean flags and other non-identity values to the
+    # claims object. Ignore those and treat the login as missing a display name
+    # only when no text-based identity is present.
+    if not isinstance(claims, dict):
+        return ""
 
     return ""
 
