@@ -1,14 +1,18 @@
 """
-TechAdmin Streamlit UI with guardrail confirmation and session password display.
+TechAdmin Streamlit UI with LangGraph orchestration, guardrail confirmation,
+secure password delivery, database-backed application authorization, and
+CrowdStrike failed-login investigation reporting.
 
 Features:
-    - Structured tables only for workflow results.
+    - Uses FlowService, which invokes the compiled TechAdmin LangGraph.
+    - Structured tables for normal identity-operation results.
+    - Dedicated visual report for failed-login/account-lockout investigations.
     - Guardrail confirmation controls for sensitive operations.
     - Reuses request ID and correlation ID after confirmation.
-    - Displays generated temporary passwords in a dedicated session panel.
-    - Removes the dashboard-only secret before conversation history and JSON download.
-    - Supports Microsoft Graph and PowerShell result shapes.
-    - Avoids conditional Streamlit expressions that can render DeltaGenerator details.
+    - Keeps plaintext passwords out of the UI and conversation history.
+    - Supports secure password TXT download and explicit manager email.
+    - Authorizes signed-in users against the app_users database.
+    - Supports Microsoft Graph, PowerShell, MCP, and CrowdStrike results.
 
 Run from the project root:
     python -m streamlit run StreamlitApp/app.py
@@ -30,21 +34,19 @@ import streamlit as st
 from flow_service import (
     LOG_FILE,
     FlowService,
-    check_ollama,
-    get_config_status,
-)
-
-# --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
-from flow_service import (
     build_password_download,
+    check_ollama,
     email_is_configured,
+    get_config_status,
     send_password_to_manager,
 )
 
-# --- ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat) ---
-from App.db.login_authorization import authorize_claims, extract_display_name
-# --- END ADDED FOR APP_USERS LOGIN CHECK ---
-# --- END ADDED FOR PASSWORD ENHANCEMENTS ---
+from App.db.login_authorization import (
+    authorize_claims,
+    extract_display_name,
+)
+
+from investigation_report_ui import render_investigation_report
 
 
 # ---------------------------------------------------------------------------
@@ -75,13 +77,6 @@ st.markdown(
 
     [data-testid="stSidebar"] > div:first-child {
         padding-top: 2rem;
-    }
-
-    .tech-hero {
-        padding: 1rem 0 1.25rem;
-        border-bottom: 1px solid var(--tech-line);
-        margin-bottom: 1.5rem;
-        text-align: left;
     }
 
     .sidebar-brand {
@@ -120,27 +115,6 @@ st.markdown(
         text-align: left;
     }
 
-    .tech-brand {
-        color: #0d4f87;
-        font-size: 1rem;
-        font-weight: 800;
-        letter-spacing: 0.16em;
-        margin-left: 0.35rem;
-    }
-
-    .tech-hero h1 {
-        color: var(--tech-ink);
-        font-size: clamp(2rem, 4vw, 3.4rem);
-        line-height: 1.05;
-        margin: 0;
-    }
-
-    .tech-hero p {
-        color: var(--tech-muted);
-        font-size: 1rem;
-        margin: 0.85rem 0 0;
-    }
-
     .tech-panel {
         background: linear-gradient(135deg, var(--tech-blue-soft), #fff);
         border: 1px solid #cfe3f2;
@@ -173,9 +147,17 @@ st.markdown(
         background: #fff;
     }
 
-    .operation-card.success { border-left-color: #18864b; }
-    .operation-card.warning { border-left-color: #b7791f; }
-    .operation-card.failure { border-left-color: #c53030; }
+    .operation-card.success {
+        border-left-color: #18864b;
+    }
+
+    .operation-card.warning {
+        border-left-color: #b7791f;
+    }
+
+    .operation-card.failure {
+        border-left-color: #c53030;
+    }
 
     .operation-label {
         color: var(--tech-muted);
@@ -202,31 +184,19 @@ st.markdown(
 )
 
 
-# --- ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat) ---
+# ---------------------------------------------------------------------------
+# Authentication and app_users authorization
+# ---------------------------------------------------------------------------
+
+
 def enforce_app_user_access(claims: dict[str, Any]) -> None:
-    """
-    Allow only people whose display name is registered in app_users.
+    """Allow only identities authorized by the app_users database."""
 
-    Signing in with Microsoft proves identity. It does not grant access to this
-    application: the display name on the sign-in must also match an active row
-    in the app_users table.
-
-    The decision is cached in the session, so the database is queried once per
-    sign-in rather than on every Streamlit rerun, which would be several
-    queries per click.
-
-    Args:
-        claims: The sign-in claims from Entra or the local test account.
-
-    Returns:
-        None. A refused user is shown the reason and the script is stopped, so
-        nothing below this point renders.
-    """
     display_name = extract_display_name(claims)
 
-    # The earlier login flow allowed an SSO or local test-user sign-in to proceed
-    # even when the identity provider did not send a display name. We retain
-    # that behavior here so a real login is not blocked by a missing claim value.
+    # Preserve the latest behavior supplied by the project. A missing-display-
+    # name identity is handled in require_authentication before this function
+    # for Microsoft SSO. This fallback mainly protects legacy local sessions.
     if not display_name:
         st.session_state.app_user_access = {
             "display_name": "",
@@ -241,9 +211,10 @@ def enforce_app_user_access(claims: dict[str, Any]) -> None:
 
     cached = st.session_state.get("app_user_access")
 
-    # Re-check whenever the signed-in person changes, so a sign-out followed by
-    # a different sign-in cannot inherit the previous decision.
-    if not (isinstance(cached, dict) and cached.get("display_name") == display_name):
+    if not (
+        isinstance(cached, dict)
+        and cached.get("display_name") == display_name
+    ):
         decision = authorize_claims(claims)
         cached = {
             "display_name": display_name,
@@ -270,32 +241,36 @@ def enforce_app_user_access(claims: dict[str, Any]) -> None:
     if st.button("Sign out", key="denied_sign_out"):
         st.session_state.pop("app_user_access", None)
         st.session_state.pop("local_authenticated_user", None)
+
         if claims.get("auth_source") != "local_test_account":
             st.logout()
+
         st.rerun()
 
     st.stop()
-# --- END ADDED FOR APP_USERS LOGIN CHECK ---
 
 
 def require_authentication() -> dict[str, Any]:
-    """Require a Microsoft Entra session before loading the dashboard."""
+    """Require Microsoft Entra or local-development authentication."""
 
     local_user = st.session_state.get("local_authenticated_user")
+
     if isinstance(local_user, dict):
-        # ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat)
         enforce_app_user_access(local_user)
         render_authenticated_user(local_user)
         return local_user
 
+    # -----------------------------------------------------------------------
+    # ORIGINAL LOGIN IMPLEMENTATION KEPT COMMENTED AS REQUESTED
+    # -----------------------------------------------------------------------
     # if not st.user.is_logged_in:
     #     st.title("TechAdmin")
     #     st.subheader("Sign in to TechAdmin")
-
+    #
     #     microsoft_tab, local_tab = st.tabs(
     #         ["Microsoft SSO", "Test account"]
     #     )
-
+    #
     #     with microsoft_tab:
     #         st.write("Use your Coforge Microsoft account.")
     #         if st.button(
@@ -304,26 +279,22 @@ def require_authentication() -> dict[str, Any]:
     #             width="stretch",
     #         ):
     #             st.login()
-
+    #
     #     with local_tab:
     #         render_local_login()
-
+    #
     #     st.stop()
 
-    # Local development mode
     if not st.user:
-
-        # If local login is enabled, skip Entra validation
         if (
             os.getenv(
                 "TECHADMIN_LOCAL_LOGIN_ENABLED",
-                "false"
+                "false",
             ).casefold()
             == "true"
         ):
             st.title("TechAdmin")
             st.subheader("Local Development Login")
-
             render_local_login()
             st.stop()
 
@@ -336,6 +307,7 @@ def require_authentication() -> dict[str, Any]:
 
         with microsoft_tab:
             st.write("Use your Coforge Microsoft account.")
+
             if st.button(
                 "Sign in with Microsoft",
                 type="primary",
@@ -348,56 +320,19 @@ def require_authentication() -> dict[str, Any]:
 
         st.stop()
 
-    # is_local_login_enabled = (
-    #     os.getenv(
-    #         "TECHADMIN_LOCAL_LOGIN_ENABLED",
-    #         "false"
-    #     ).casefold() == "true"
-    # )
-
-    # # Entra not configured and local login enabled
-    # if not st.user and is_local_login_enabled:
-    #     st.title("TechAdmin")
-    #     st.subheader("Sign in to TechAdmin")
-
-    #     render_local_login()
-    #     st.stop()
-
-    # if not st.user:
-    #     st.title("TechAdmin")
-    #     st.subheader("Sign in to TechAdmin")
-
-    #     microsoft_tab, local_tab = st.tabs(
-    #         ["Microsoft SSO", "Test account"]
-    #     )
-
-    #     with microsoft_tab:
-    #         st.write("Use your Coforge Microsoft account.")
-    #         if st.button(
-    #             "Sign in with Microsoft",
-    #             type="primary",
-    #             width="stretch",
-    #         ):
-    #             st.login()
-
-    # with local_tab:
-    #     render_local_login()
-
-    # st.stop()
-
     claims = dict(st.user)
 
-    # If the auth session exists but does not contain a usable identity, fall
-    # back to the original sign-in chooser instead of entering the dashboard on a
-    # stale/blank OAuth session.
     if not extract_display_name(claims):
         st.title("TechAdmin")
         st.subheader("Sign in to TechAdmin")
 
-        microsoft_tab, local_tab = st.tabs(["Microsoft SSO", "Test account"])
+        microsoft_tab, local_tab = st.tabs(
+            ["Microsoft SSO", "Test account"]
+        )
 
         with microsoft_tab:
             st.write("Use your Coforge Microsoft account.")
+
             if st.button(
                 "Sign in with Microsoft",
                 type="primary",
@@ -411,24 +346,21 @@ def require_authentication() -> dict[str, Any]:
 
         st.stop()
 
-    # Tenant restriction temporarily disabled while the Entra tenant config is
-    # being aligned. Re-enable this check only after the target tenant ID is
-    # confirmed and the production SSO configuration matches it.
+    # Tenant restriction remains commented while tenant configuration is
+    # aligned. This preserves the latest supplied application behavior.
     # expected_tenant = str(
     #     st.secrets.get("entra", {}).get("allowed_tenant_id", "")
     # ).strip()
     # actual_tenant = str(claims.get("tid", "")).strip()
+    #
     # if expected_tenant and actual_tenant != expected_tenant:
     #     st.error("This Microsoft tenant is not authorized for TechAdmin.")
     #     if st.button("Sign out", width="content"):
     #         st.logout()
     #     st.stop()
 
-    # ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat)
     enforce_app_user_access(claims)
-
     render_authenticated_user(claims)
-
     return claims
 
 
@@ -455,7 +387,10 @@ def render_local_login() -> None:
         "TECHADMIN_LOCAL_LOGIN_USERNAME",
         "TechAdminTestUser",
     )
-    expected_password = os.getenv("TECHADMIN_LOCAL_LOGIN_PASSWORD", "")
+    expected_password = os.getenv(
+        "TECHADMIN_LOCAL_LOGIN_PASSWORD",
+        "",
+    )
 
     valid_username = hmac.compare_digest(
         username.strip().casefold(),
@@ -475,11 +410,12 @@ def render_local_login() -> None:
         "preferred_username": expected_username,
         "auth_source": "local_test_account",
     }
+    st.session_state.pop("app_user_access", None)
     st.rerun()
 
 
 def render_authenticated_user(claims: dict[str, Any]) -> None:
-    """Render identity and provide a logout action for either auth method."""
+    """Render identity and a logout action for either auth method."""
 
     with st.sidebar:
         st.markdown(
@@ -492,19 +428,36 @@ def render_authenticated_user(claims: dict[str, Any]) -> None:
             """,
             unsafe_allow_html=True,
         )
+
         display_name = (
             claims.get("name")
             or claims.get("preferred_username")
             or "Authenticated user"
         )
         st.caption(f"Signed in as {display_name}")
+
         if claims.get("auth_source") == "local_test_account":
-            if st.button("Sign out", key="local_sign_out", width="stretch"):
+            if st.button(
+                "Sign out",
+                key="local_sign_out",
+                width="stretch",
+            ):
                 st.session_state.pop("local_authenticated_user", None)
+                st.session_state.pop("app_user_access", None)
                 st.rerun()
-        elif st.button("Sign out", key="sign_out", width="stretch"):
+
+        elif st.button(
+            "Sign out",
+            key="sign_out",
+            width="stretch",
+        ):
+            st.session_state.pop("app_user_access", None)
             st.logout()
 
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 EXAMPLES = [
     "Get user details for MigrationTest2@Coforge.com",
@@ -514,6 +467,14 @@ EXAMPLES = [
     "Reset password for MigrationTest2@Coforge.com via script",
     "Add user MigrationTest2@Coforge.com to group TechAI_Group",
     "Remove user MigrationTest2@Coforge.com from group TechAI_Group",
+    (
+        "Investigate failed logins for "
+        "Amit.Bhagat@Coforge.com in the last 24 hours"
+    ),
+    (
+        "Investigate account lockout for "
+        "MigrationTest3@Coforge.com in the last 24 hours"
+    ),
 ]
 
 YES_WORDS = {
@@ -548,6 +509,7 @@ SENSITIVE_HISTORY_KEYS = {
     "access_token",
     "refresh_token",
     "_dashboard_secret",
+    "_transient_password",
 }
 
 
@@ -558,13 +520,13 @@ SENSITIVE_HISTORY_KEYS = {
 
 @st.cache_resource(show_spinner="Starting TechAdmin...")
 def get_service() -> FlowService:
-    """Create and cache the workflow service."""
+    """Create and cache the LangGraph-backed workflow service."""
 
     return FlowService()
 
 
 def init_state() -> None:
-    """Initialize the Streamlit session keys used by the application."""
+    """Initialize Streamlit session state."""
 
     st.session_state.setdefault("conversation", [])
     st.session_state.setdefault("queued_query", None)
@@ -574,12 +536,12 @@ def init_state() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Generic data and table helpers
+# Generic formatting helpers
 # ---------------------------------------------------------------------------
 
 
 def display_text(value: Any) -> str:
-    """Convert a value into readable table text."""
+    """Convert one value into readable table text."""
 
     if value is None or value == "":
         return "—"
@@ -629,7 +591,7 @@ def flatten_rows(
     data: Dict[str, Any],
     excluded: set[str] | None = None,
 ) -> list[tuple[str, Any]]:
-    """Convert a dictionary into readable rows without dropping nested data."""
+    """Convert a dictionary into readable rows."""
 
     excluded_keys = excluded or set()
     rows: list[tuple[str, Any]] = []
@@ -656,7 +618,7 @@ def flatten_rows(
 
 
 def redact_sensitive_history(value: Any) -> Any:
-    """Remove plaintext credentials from conversation history and downloads."""
+    """Remove plaintext credentials from history and downloads."""
 
     if isinstance(value, dict):
         cleaned: dict[str, Any] = {}
@@ -674,23 +636,25 @@ def redact_sensitive_history(value: Any) -> Any:
         return cleaned
 
     if isinstance(value, list):
-        return [redact_sensitive_history(item) for item in value]
+        return [
+            redact_sensitive_history(item)
+            for item in value
+        ]
 
     return value
 
 
 # ---------------------------------------------------------------------------
-# Temporary-password dashboard
+# Legacy dashboard-password interface
 # ---------------------------------------------------------------------------
 
 
 def register_dashboard_secret(response: Dict[str, Any]) -> bool:
     """
-    Move `_dashboard_secret` from the response into current session state.
+    Remove any legacy dashboard secret from a response.
 
-    FlowService must create `_dashboard_secret` before returning the response.
-    This function removes that field before the response is added to normal
-    conversation history or shown as raw JSON.
+    Current FlowService never creates this field. The method remains for
+    compatibility and defensively prevents a secret from reaching history.
     """
 
     secret = response.pop("_dashboard_secret", None)
@@ -698,71 +662,14 @@ def register_dashboard_secret(response: Dict[str, Any]) -> bool:
     if not isinstance(secret, dict):
         return False
 
-    password = secret.get("password")
-
-    if (
-        not isinstance(password, str)
-        or not password
-        or password.casefold() == "[redacted]"
-    ):
-        return False
-
-    password_card = {
-        "password": password,
-        "user": secret.get("user") or "Unknown user",
-        "backend": secret.get("backend") or "unknown",
-        "operation_id": secret.get("operation_id"),
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-    st.session_state.password_cards.insert(0, password_card)
-    return True
+    # Do not restore plaintext-password rendering. Discard the legacy payload.
+    return False
 
 
 def render_password_cards() -> None:
-    """Display generated temporary passwords during the current UI session."""
+    """Legacy password-card renderer retained but intentionally unused."""
 
-    cards = st.session_state.password_cards
-
-    if not cards:
-        return
-
-    st.markdown("### Generated temporary passwords")
-
-    for index, card in enumerate(list(cards)):
-        with st.container(border=True):
-            show_table(
-                [
-                    ("Account", card.get("user")),
-                    ("Backend", card.get("backend")),
-                    ("Generated", card.get("created_at")),
-                    ("Operation ID", card.get("operation_id")),
-                ]
-            )
-
-            st.markdown("**Temporary password**")
-            st.code(
-                card.get("password") or "",
-                language=None,
-            )
-
-            if st.button(
-                "Remove password",
-                key=f"remove_password_{index}",
-                width="content",
-            ):
-                st.session_state.password_cards.pop(index)
-                st.rerun()
-
-    if st.button(
-        "Clear displayed passwords",
-        type="secondary",
-        width="content",
-    ):
-        st.session_state.password_cards = []
-        st.rerun()
-
-    st.divider()
+    return
 
 
 # ---------------------------------------------------------------------------
@@ -790,15 +697,24 @@ def render_script_execution(execution: Dict[str, Any]) -> None:
 
 
 def render_guardrails(response: Dict[str, Any]) -> None:
-    """Render guardrail decisions and violations as tables."""
+    """Render guardrail decisions and violations."""
 
     show_table(
         [
             ("Action", response.get("guardrail_action")),
             ("Blocked", response.get("guardrail_blocked")),
-            ("Confirmation required", response.get("confirmation_required")),
-            ("Confirmation prompt", response.get("confirmation_prompt")),
-            ("Output filtered fields", response.get("guardrails_output_filtered")),
+            (
+                "Confirmation required",
+                response.get("confirmation_required"),
+            ),
+            (
+                "Confirmation prompt",
+                response.get("confirmation_prompt"),
+            ),
+            (
+                "Output filtered fields",
+                response.get("guardrails_output_filtered"),
+            ),
         ],
         "Guardrails",
     )
@@ -816,18 +732,9 @@ def render_guardrails(response: Dict[str, Any]) -> None:
             )
 
 
-# --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
 def render_password_reset_actions(result: Dict[str, Any]) -> None:
-    """
-    Show the outcome of a password reset.
+    """Render secure post-reset actions without exposing plaintext."""
 
-    Displays the masked password, the manager, and the two operator actions.
-    The original password is not present in `result` at all: the tool returns a
-    masked form plus an opaque token, and the token is what the buttons use.
-
-    Args:
-        result: The tool result payload from the reset.
-    """
     st.success("Password Reset Successful")
 
     manager_name = result.get("manager_name") or "Not Available"
@@ -835,9 +742,16 @@ def render_password_reset_actions(result: Dict[str, Any]) -> None:
 
     show_table(
         [
-            ("Username", result.get("user_name") or result.get("user_principal_name")),
+            (
+                "Username",
+                result.get("user_name")
+                or result.get("user_principal_name"),
+            ),
             ("Employee name", result.get("employee_name")),
-            ("Temporary password", result.get("masked_password") or "Not Available"),
+            (
+                "Temporary password",
+                result.get("masked_password") or "Not Available",
+            ),
             ("Manager", manager_name),
             ("Manager email", manager_email),
             ("Backend", result.get("backend")),
@@ -846,6 +760,7 @@ def render_password_reset_actions(result: Dict[str, Any]) -> None:
     )
 
     execution = result.get("execution")
+
     if isinstance(execution, dict):
         render_script_execution(execution)
 
@@ -867,23 +782,20 @@ def render_password_reset_actions(result: Dict[str, Any]) -> None:
     render_password_actions(token, manager_email)
 
 
-def render_password_actions(token: str, manager_email: str) -> None:
-    """
-    Draw the Send Email and Download buttons for a completed reset.
+def render_password_actions(
+    token: str,
+    manager_email: str,
+) -> None:
+    """Render explicit manager-email and secure-download actions."""
 
-    Both actions are explicit. Nothing is emailed as a side effect of the reset
-    itself; the mail goes out only when the operator presses the button.
-
-    Args:
-        token: The password token from the reset result.
-        manager_email: Recipient, or "Not Available".
-    """
-    # Keyed by token so two resets in one session keep separate buttons and
-    # separate status lines.
     status_key = f"email_status_{token}"
     st.session_state.setdefault(status_key, None)
 
-    can_email = bool(manager_email) and manager_email != "Not Available"
+    can_email = (
+        bool(manager_email)
+        and manager_email != "Not Available"
+        and email_is_configured()
+    )
 
     left, right = st.columns(2)
 
@@ -891,19 +803,17 @@ def render_password_actions(token: str, manager_email: str) -> None:
         "Send Email To Manager",
         key=f"send_{token}",
         disabled=not can_email,
+        width="stretch",
     ):
         with st.spinner("Sending email..."):
             sent, message, recipient = send_password_to_manager(token)
+
         st.session_state[status_key] = {
             "sent": sent,
             "message": message,
             "recipient": recipient,
         }
 
-    # CHANGED (Amit Bhagat): one button, as the specification shows. An earlier
-    # version needed Prepare and then Download, which meant two clicks and a
-    # dead-looking first press. st.download_button needs its data up front, so
-    # the file is built while rendering.
     ok, filename, content, message = build_password_download(token)
 
     if ok:
@@ -913,14 +823,14 @@ def render_password_actions(token: str, manager_email: str) -> None:
             file_name=filename,
             mime="text/plain",
             key=f"dl_{token}",
+            width="stretch",
         )
     else:
-        # Generation failures are reported without disturbing the reset, which
-        # has already succeeded.
         right.button(
             "Download Password TXT",
             key=f"dl_disabled_{token}",
             disabled=True,
+            width="stretch",
         )
         st.caption(message)
 
@@ -929,16 +839,53 @@ def render_password_actions(token: str, manager_email: str) -> None:
     if status is None:
         st.caption("Email status: Not Sent")
     elif status["sent"]:
-        st.success(f"Email status: Sent Successfully to {status['recipient']}")
+        st.success(
+            "Email status: Sent Successfully to "
+            f"{status['recipient']}"
+        )
     else:
-        # A failed send is reported but does not undo the reset, which has
-        # already succeeded. The TXT download stays available.
-        st.error(f"Email status: Failed. {status['message']}")
-# --- END ADDED FOR PASSWORD ENHANCEMENTS ---
+        st.error(
+            f"Email status: Failed. {status['message']}"
+        )
 
 
 def render_result(intent: str, result: Dict[str, Any]) -> None:
-    """Render API or script operation results."""
+    """Render generic, password-reset, or investigation results."""
+
+    # CrowdStrike failed-login and account-lockout investigations must be
+    # rendered before generic flattening. Otherwise the report dictionary and
+    # event timeline become one unreadable JSON value in the Result table.
+    if intent == "failed_login_investigation":
+        report = result.get("report")
+
+        if isinstance(report, dict):
+            render_investigation_report(report)
+            return
+
+        st.warning(
+            "The failed-login investigation completed, but the response did "
+            "not contain a structured investigation report."
+        )
+
+        show_table(
+            [
+                ("Source", result.get("source")),
+                (
+                    "Allowed event IDs",
+                    result.get("allowed_event_ids"),
+                ),
+                ("Message", result.get("message")),
+            ],
+            "Investigation result",
+        )
+        return
+
+    if (
+        intent == "password_reset"
+        and result.get("password_token")
+    ):
+        render_password_reset_actions(result)
+        return
 
     execution = result.get("execution")
     user_record = result.get("user")
@@ -948,24 +895,28 @@ def render_result(intent: str, result: Dict[str, Any]) -> None:
         "user",
         "new_password",
         "temporary_password",
+        "_transient_password",
+        "report",
+        "report_markdown",
     }
 
     if isinstance(user_record, dict):
-        result_rows = [("Backend", result.get("backend"))]
-        result_rows.extend(flatten_rows(user_record))
+        result_rows = [
+            ("Backend", result.get("backend"))
+        ]
+        result_rows.extend(
+            flatten_rows(user_record)
+        )
     else:
-        result_rows = flatten_rows(result, excluded)
+        result_rows = flatten_rows(
+            result,
+            excluded,
+        )
 
     show_table(result_rows, "Result")
 
     if isinstance(execution, dict):
         render_script_execution(execution)
-
-    # --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
-    if intent == "password_reset" and result.get("password_token"):
-        render_password_reset_actions(result)
-        return
-    # --- END ADDED FOR PASSWORD ENHANCEMENTS ---
 
     if intent == "password_reset":
         redacted_value = (
@@ -979,10 +930,8 @@ def render_result(intent: str, result: Dict[str, Any]) -> None:
                     (
                         "Password display",
                         (
-                            "The normal response is redacted. The generated "
-                            "password appears in the dashboard panel only when "
-                            "FlowService receives the original value before "
-                            "output sanitization."
+                            "The response password is redacted. Use the "
+                            "secure password-token delivery workflow."
                         ),
                     )
                 ],
@@ -991,7 +940,7 @@ def render_result(intent: str, result: Dict[str, Any]) -> None:
 
 
 def render_response(response: Dict[str, Any]) -> None:
-    """Render workflow data without success/error notification boxes."""
+    """Render one complete workflow response."""
 
     render_operation_summary(response)
     confidence = response.get("confidence")
@@ -1021,7 +970,10 @@ def render_response(response: Dict[str, Any]) -> None:
 
     if isinstance(metadata, dict):
         show_table(
-            flatten_rows(metadata),
+            flatten_rows(
+                metadata,
+                SENSITIVE_HISTORY_KEYS,
+            ),
             "Extracted metadata",
         )
 
@@ -1036,6 +988,14 @@ def render_response(response: Dict[str, Any]) -> None:
         ],
         "Routing",
     )
+
+    orchestration = response.get("orchestration")
+
+    if isinstance(orchestration, dict):
+        show_table(
+            flatten_rows(orchestration),
+            "Orchestration",
+        )
 
     execution_context = response.get("execution_context")
 
@@ -1056,7 +1016,10 @@ def render_response(response: Dict[str, Any]) -> None:
                 ("Succeeded", tool_result.get("success")),
                 ("Message", tool_result.get("message")),
                 ("Error", tool_result.get("error")),
-                ("API integration pending", tool_result.get("api_integration_pending")),
+                (
+                    "API integration pending",
+                    tool_result.get("api_integration_pending"),
+                ),
             ],
             "Tool execution",
         )
@@ -1069,14 +1032,31 @@ def render_response(response: Dict[str, Any]) -> None:
                 result,
             )
 
-    with st.expander("Raw response (JSON)"):
-        st.json(response)
+    safe_raw_response = redact_sensitive_history(
+        copy.deepcopy(response)
+    )
+
+    if response.get("intent") == "failed_login_investigation":
+        with st.expander(
+            "Technical investigation details",
+            expanded=False,
+        ):
+            st.json(safe_raw_response)
+    else:
+        with st.expander(
+            "Raw response (JSON)",
+            expanded=False,
+        ):
+            st.json(safe_raw_response)
 
 
 def render_operation_summary(response: Dict[str, Any]) -> None:
-    """Show the key operation state before detailed result tables."""
+    """Show operation status before detailed tables."""
 
-    intent = str(response.get("intent") or "Identity operation")
+    intent = str(
+        response.get("intent")
+        or "Identity operation"
+    )
     title = intent.replace("_", " ").title()
     metadata = response.get("metadata")
     target = "Unknown target"
@@ -1111,7 +1091,11 @@ def render_operation_summary(response: Dict[str, Any]) -> None:
         <div class="operation-card {status_class}">
             <div class="operation-label">Current operation</div>
             <div class="operation-title">{safe_title}</div>
-            <div class="operation-meta"><strong>Target:</strong> {safe_target} &nbsp; | &nbsp; <strong>Status:</strong> {safe_status}</div>
+            <div class="operation-meta">
+                <strong>Target:</strong> {safe_target}
+                &nbsp; | &nbsp;
+                <strong>Status:</strong> {safe_status}
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1120,19 +1104,31 @@ def render_operation_summary(response: Dict[str, Any]) -> None:
     timeline = [
         ("Request received", True),
         ("Request analyzed", True),
-        ("Target validated", not bool(response.get("error"))),
+        (
+            "Target validated",
+            not bool(response.get("error")),
+        ),
     ]
 
     if response.get("confirmation_required"):
-        timeline.append(("Confirmation required", True))
+        timeline.append(
+            ("Confirmation required", True)
+        )
     else:
-        timeline.append(("Operation completed", response.get("success") is True))
+        timeline.append(
+            (
+                "Operation completed",
+                response.get("success") is True,
+            )
+        )
 
     st.markdown("**Operation timeline**")
-    st.caption("  ·  ".join(
-        f"{'✓' if complete else '○'} {label}"
-        for label, complete in timeline
-    ))
+    st.caption(
+        "  ·  ".join(
+            f"{'✓' if complete else '○'} {label}"
+            for label, complete in timeline
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1144,7 +1140,7 @@ def set_pending_confirmation(
     response: Dict[str, Any],
     query: str,
 ) -> None:
-    """Store a request while guardrails wait for operator confirmation."""
+    """Persist the trusted confirmation context in Streamlit session state."""
 
     if response.get("confirmation_required"):
         st.session_state.pending_confirmation = {
@@ -1163,7 +1159,7 @@ def append_conversation(
     content: Any,
     timestamp: str,
 ) -> None:
-    """Append a password-safe conversation item."""
+    """Append one password-safe conversation item."""
 
     st.session_state.conversation.append(
         {
@@ -1184,7 +1180,7 @@ def execute_and_render(
     correlation_id: str | None = None,
     add_user_turn: bool = True,
 ) -> Dict[str, Any]:
-    """Execute one workflow request and save the password-safe result."""
+    """Execute one LangGraph request and store a redacted response."""
 
     timestamp = datetime.now().strftime("%H:%M:%S")
 
@@ -1221,7 +1217,7 @@ def execute_and_render(
 
 
 def cancel_pending_confirmation() -> None:
-    """Cancel the pending operation without running the tool."""
+    """Cancel a pending operation without invoking its tool."""
 
     pending = st.session_state.pending_confirmation
     st.session_state.pending_confirmation = None
@@ -1258,7 +1254,7 @@ def cancel_pending_confirmation() -> None:
 
 
 def render_confirmation_controls() -> None:
-    """Render trusted confirmation controls for a pending operation."""
+    """Render trusted approval controls for a pending operation."""
 
     pending = st.session_state.pending_confirmation
 
@@ -1299,7 +1295,7 @@ def render_confirmation_controls() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar
+# Sidebar and session summaries
 # ---------------------------------------------------------------------------
 
 
@@ -1308,7 +1304,9 @@ def safe_conversation_download() -> str:
 
     return json.dumps(
         redact_sensitive_history(
-            copy.deepcopy(st.session_state.conversation)
+            copy.deepcopy(
+                st.session_state.conversation
+            )
         ),
         indent=2,
         ensure_ascii=False,
@@ -1317,18 +1315,65 @@ def safe_conversation_download() -> str:
 
 
 def render_sidebar() -> None:
-    """Render environment, examples, and session controls."""
+    """Render system status, examples, and session controls."""
 
     with st.sidebar:
         st.header("System status")
 
         status = get_config_status()
+
         show_table(
             [
-                ("Microsoft Graph", "Configured" if status.get("graph_client_id") and status.get("graph_client_secret") and status.get("graph_tenant_id") else "Incomplete"),
-                ("PowerShell", "Enabled" if status.get("powershell_operations_enabled") else "Disabled"),
-                ("Destructive actions", "Enabled" if status.get("destructive_operations_enabled") else "Disabled"),
-                ("Configuration", "Valid" if status.get("config_valid") else "Invalid"),
+                (
+                    "Microsoft Graph",
+                    (
+                        "Configured"
+                        if status.get("graph_client_id")
+                        and status.get("graph_client_secret")
+                        and status.get("graph_tenant_id")
+                        else "Incomplete"
+                    ),
+                ),
+                (
+                    "PowerShell",
+                    (
+                        "Enabled"
+                        if status.get("powershell_operations_enabled")
+                        else "Disabled"
+                    ),
+                ),
+                (
+                    "Destructive actions",
+                    (
+                        "Enabled"
+                        if status.get("destructive_operations_enabled")
+                        else "Disabled"
+                    ),
+                ),
+                (
+                    "LangGraph",
+                    (
+                        "Active"
+                        if status.get("orchestration_engine") == "langgraph"
+                        else "Unavailable"
+                    ),
+                ),
+                (
+                    "Operation audit",
+                    (
+                        "Enabled"
+                        if status.get("operation_audit_enabled")
+                        else "Unknown"
+                    ),
+                ),
+                (
+                    "Configuration",
+                    (
+                        "Valid"
+                        if status.get("config_valid")
+                        else "Invalid"
+                    ),
+                ),
             ]
         )
 
@@ -1349,8 +1394,13 @@ def render_sidebar() -> None:
                 [
                     (
                         "Ollama",
-                        "Connected" if ollama_result.get("connected") else "Unavailable",
+                        (
+                            "Connected"
+                            if ollama_result.get("connected")
+                            else "Unavailable"
+                        ),
                     ),
+                    ("Details", ollama_result.get("message")),
                 ]
             )
 
@@ -1371,8 +1421,14 @@ def render_sidebar() -> None:
         st.divider()
         st.caption("Example queries")
 
-        for example in EXAMPLES:
-            st.caption(example)
+        for index, example in enumerate(EXAMPLES):
+            if st.button(
+                example,
+                key=f"example_{index}",
+                width="stretch",
+            ):
+                st.session_state.queued_query = example
+                st.rerun()
 
         st.divider()
         st.caption(f"Logs: {LOG_FILE}")
@@ -1396,24 +1452,45 @@ def render_sidebar() -> None:
 
 
 def render_recent_operations() -> None:
-    """Show completed session operations without exposing sensitive values."""
+    """Show recent operations without sensitive values."""
 
-    operations = []
+    operations: list[dict[str, Any]] = []
+
     for turn in reversed(st.session_state.conversation):
-        if turn.get("role") != "assistant" or not isinstance(turn.get("content"), dict):
+        if (
+            turn.get("role") != "assistant"
+            or not isinstance(turn.get("content"), dict)
+        ):
             continue
 
         response = turn["content"]
         metadata = response.get("metadata")
         target = "Unknown target"
+
         if isinstance(metadata, dict):
-            target = metadata.get("email") or metadata.get("username") or target
+            target = (
+                metadata.get("email")
+                or metadata.get("username")
+                or target
+            )
+
+        if response.get("confirmation_required"):
+            operation_status = "Awaiting confirmation"
+        elif response.get("cancelled"):
+            operation_status = "Cancelled"
+        elif response.get("success") is True:
+            operation_status = "Completed"
+        else:
+            operation_status = "Failed"
 
         operations.append(
             {
-                "Operation": str(response.get("intent") or "Identity operation").replace("_", " ").title(),
+                "Operation": str(
+                    response.get("intent")
+                    or "Identity operation"
+                ).replace("_", " ").title(),
                 "Target": target,
-                "Status": "Completed" if response.get("success") else "Failed",
+                "Status": operation_status,
                 "Time": turn.get("time", ""),
             }
         )
@@ -1423,11 +1500,15 @@ def render_recent_operations() -> None:
 
     if operations:
         st.markdown("#### Recent operations")
-        st.dataframe(pd.DataFrame(operations), hide_index=True, width="stretch")
+        st.dataframe(
+            pd.DataFrame(operations),
+            hide_index=True,
+            width="stretch",
+        )
 
 
 def render_command_center() -> None:
-    """Render guidance before the conversation has any messages."""
+    """Render guidance before the first conversation turn."""
 
     if st.session_state.conversation:
         return
@@ -1436,11 +1517,17 @@ def render_command_center() -> None:
         """
         <div class="tech-panel">
             <strong>What do you need to take care of?</strong>
-            <span>Ask for a user lookup, password reset, account unlock, or access change. Sensitive actions pause for confirmation.</span>
+            <span>
+                Ask for a user lookup, password reset, account unlock,
+                access change, directory operation, VM provisioning, or a
+                failed-login and account-lockout investigation. Sensitive
+                actions pause for confirmation.
+            </span>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
 
 # ---------------------------------------------------------------------------
 # Main application
@@ -1452,13 +1539,10 @@ def main() -> None:
 
     require_authentication()
     init_state()
-
     render_command_center()
 
-    # CHANGED FOR PASSWORD ENHANCEMENTS (Amit Bhagat): the plaintext password
-    # dashboard is gone. The specification forbids the original password on the
-    # UI; the reset result now shows a masked form with Download and Send Email
-    # actions instead.
+    # Plaintext password display remains intentionally disabled. Passwords are
+    # available only through the secure token-based download/email workflow.
     # render_password_cards()
 
     for turn in st.session_state.conversation:
@@ -1479,7 +1563,10 @@ def main() -> None:
         pending = st.session_state.pending_confirmation
         normalized_answer = query.strip().casefold().rstrip(".!")
 
-        if isinstance(pending, dict) and normalized_answer in YES_WORDS:
+        if (
+            isinstance(pending, dict)
+            and normalized_answer in YES_WORDS
+        ):
             append_conversation(
                 "user",
                 query,
@@ -1496,7 +1583,10 @@ def main() -> None:
                 add_user_turn=False,
             )
 
-        elif isinstance(pending, dict) and normalized_answer in NO_WORDS:
+        elif (
+            isinstance(pending, dict)
+            and normalized_answer in NO_WORDS
+        ):
             append_conversation(
                 "user",
                 query,
