@@ -55,6 +55,16 @@ from App.workflow.state import (
 class UnifiedIntentMetadataExtractor:
     """Extract and normalize one TechAdmin intent and its metadata."""
 
+    EXPLICIT_EMAIL_PATTERN = re.compile(
+        r"(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![\w.-])",
+        re.IGNORECASE,
+    )
+    EXPLICIT_DETAILS_USERNAME_PATTERN = re.compile(
+        r"\b(?:details?|information?)\s+(?:for\s+|of\s+)?"
+        r"([A-Z0-9][A-Z0-9._-]{1,})\b",
+        re.IGNORECASE,
+    )
+
     STRING_METADATA_FIELDS: tuple[str, ...] = (
         "username",
         "user_id",
@@ -583,6 +593,27 @@ class UnifiedIntentMetadataExtractor:
         )
         deterministic_intent = cls._detect_deterministic_intent(user_input)
         selected_intent = deterministic_intent or model_intent
+
+        explicit_email_match = cls.EXPLICIT_EMAIL_PATTERN.search(user_input)
+        if explicit_email_match:
+            explicit_email = explicit_email_match.group(0).casefold()
+            normalized_metadata["email"] = explicit_email
+            normalized_metadata["username"] = explicit_email.split(
+                "@",
+                maxsplit=1,
+            )[0]
+            normalized_metadata["username_source"] = "derived_from_email"
+        elif (
+            selected_intent is IntentType.GET_USER_DETAILS
+            and not normalized_metadata.get("username")
+            and not normalized_metadata.get("email")
+        ):
+            username_match = cls.EXPLICIT_DETAILS_USERNAME_PATTERN.search(
+                user_input
+            )
+            if username_match:
+                normalized_metadata["username"] = username_match.group(1)
+                normalized_metadata["username_source"] = "explicit"
 
         membership_metadata = cls._extract_membership_metadata(user_input)
         if selected_intent in {IntentType.GRANT_ACCESS, IntentType.REVOKE_ACCESS}:
