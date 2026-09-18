@@ -40,6 +40,10 @@ from flow_service import (
     email_is_configured,
     send_password_to_manager,
 )
+
+# --- ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat) ---
+from App.db.login_authorization import authorize_claims, extract_display_name
+# --- END ADDED FOR APP_USERS LOGIN CHECK ---
 # --- END ADDED FOR PASSWORD ENHANCEMENTS ---
 
 
@@ -198,11 +202,74 @@ st.markdown(
 )
 
 
+# --- ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat) ---
+def enforce_app_user_access(claims: dict[str, Any]) -> None:
+    """
+    Allow only people whose display name is registered in app_users.
+
+    Signing in with Microsoft proves identity. It does not grant access to this
+    application: the display name on the sign-in must also match an active row
+    in the app_users table.
+
+    The decision is cached in the session, so the database is queried once per
+    sign-in rather than on every Streamlit rerun, which would be several
+    queries per click.
+
+    Args:
+        claims: The sign-in claims from Entra or the local test account.
+
+    Returns:
+        None. A refused user is shown the reason and the script is stopped, so
+        nothing below this point renders.
+    """
+    display_name = extract_display_name(claims)
+
+    cached = st.session_state.get("app_user_access")
+
+    # Re-check whenever the signed-in person changes, so a sign-out followed by
+    # a different sign-in cannot inherit the previous decision.
+    if not (isinstance(cached, dict) and cached.get("display_name") == display_name):
+        decision = authorize_claims(claims)
+        cached = {
+            "display_name": display_name,
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "message": decision.message,
+            "user_principal_name": decision.user_principal_name,
+            "user_id": decision.user_id,
+            "department": decision.department,
+        }
+        st.session_state.app_user_access = cached
+
+    if cached["allowed"]:
+        return
+
+    st.title("TechAdmin")
+    st.error(cached["message"])
+    st.caption(
+        f"Signed in as: {display_name or 'unknown'}. "
+        "Access is granted only to users registered in the TechAdmin "
+        "app_users directory."
+    )
+
+    if st.button("Sign out", key="denied_sign_out"):
+        st.session_state.pop("app_user_access", None)
+        st.session_state.pop("local_authenticated_user", None)
+        if claims.get("auth_source") != "local_test_account":
+            st.logout()
+        st.rerun()
+
+    st.stop()
+# --- END ADDED FOR APP_USERS LOGIN CHECK ---
+
+
 def require_authentication() -> dict[str, Any]:
     """Require a Microsoft Entra session before loading the dashboard."""
 
     local_user = st.session_state.get("local_authenticated_user")
     if isinstance(local_user, dict):
+        # ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat)
+        enforce_app_user_access(local_user)
         render_authenticated_user(local_user)
         return local_user
 
@@ -314,6 +381,9 @@ def require_authentication() -> dict[str, Any]:
         if st.button("Sign out", width="content"):
             st.logout()
         st.stop()
+
+    # ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat)
+    enforce_app_user_access(claims)
 
     render_authenticated_user(claims)
 
