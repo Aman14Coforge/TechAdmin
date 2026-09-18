@@ -196,12 +196,68 @@ class UnifiedIntentMetadataExtractor:
             r"\bremove\s+(?:the\s+)?(?:active\s+directory\s+|ad\s+)?user\s+account\b",
             r"\bdeprovision\s+(?:the\s+)?(?:active\s+directory\s+|ad\s+)?user\b",
         ),
-        IntentType.FAILED_LOGIN_INVESTIGATION: (
-            r"\binvestigate\s+(?:the\s+)?failed\s+(?:logins?|sign[ -]?ins?)\b",
-            r"\bcheck\s+(?:the\s+)?failed\s+(?:logins?|sign[ -]?ins?)\b",
-            r"\bauthentication\s+failures?\b",
-            r"\bwhy\s+(?:is|was)\s+.+?\s+(?:locked|locking\s+out)\b",
-        ),
+       IntentType.FAILED_LOGIN_INVESTIGATION: (
+    # Failed login and sign-in investigation wording
+    (
+        r"\binvestigate\s+(?:the\s+)?"
+        r"failed\s+(?:logins?|logons?|sign[ -]?ins?)\b"
+    ),
+    (
+        r"\bcheck\s+(?:the\s+)?"
+        r"failed\s+(?:logins?|logons?|sign[ -]?ins?)\b"
+    ),
+    (
+        r"\banaly[sz]e\s+(?:the\s+)?"
+        r"failed\s+(?:logins?|logons?|sign[ -]?ins?)\b"
+    ),
+
+    # Direct account-lockout investigation wording
+    (
+        r"\binvestigate\s+(?:the\s+)?"
+        r"(?:account\s+)?lockouts?\b"
+    ),
+    (
+        r"\bcheck\s+(?:the\s+)?"
+        r"(?:account\s+)?lockouts?\b"
+    ),
+    (
+        r"\banaly[sz]e\s+(?:the\s+)?"
+        r"(?:account\s+)?lockouts?\b"
+    ),
+    (
+        r"\baccount\s+lockout\s+investigation\b"
+    ),
+    (
+        r"\blockout\s+investigation\b"
+    ),
+
+    # Authentication failure wording
+    (
+        r"\binvestigate\s+(?:the\s+)?"
+        r"authentication\s+failures?\b"
+    ),
+    (
+        r"\bcheck\s+(?:the\s+)?"
+        r"authentication\s+failures?\b"
+    ),
+    (
+        r"\bauthentication\s+failures?\b"
+    ),
+
+    # Natural-language diagnostic wording
+    (
+        r"\bwhy\s+(?:is|was|does|did)\s+.+?\s+"
+        r"(?:locked|lock(?:ing|ed)?\s+out)\b"
+    ),
+    (
+        r"\bwhy\s+(?:is|was)\s+(?:the\s+)?"
+        r"account\s+locked\b"
+    ),
+    (
+        r"\bfind\s+(?:the\s+)?cause\s+of\s+"
+        r"(?:the\s+)?(?:account\s+)?lockout\b"
+    ),
+),
         IntentType.CREATE_VM: (
             r"\bcreate\s+(?:a\s+|an\s+)?(?:new\s+)?vm\b",
             r"\bcreate\s+(?:a\s+|an\s+)?(?:new\s+)?virtual\s+machine\b",
