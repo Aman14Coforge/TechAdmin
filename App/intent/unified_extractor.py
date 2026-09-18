@@ -114,6 +114,11 @@ class UnifiedIntentMetadataExtractor:
         r"\bmicrosoft\s+graph\s+api\b",
     )
 
+    EXPLICIT_EMAIL_PATTERN = re.compile(
+        r"(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})",
+        flags=re.IGNORECASE,
+    )
+
     DETERMINISTIC_INTENT_PATTERNS: dict[IntentType, tuple[str, ...]] = {
         IntentType.GET_USER_DETAILS: (
             r"\bget\s+(?:the\s+)?(?:ad\s+)?user\s+details?\b",
@@ -490,6 +495,12 @@ class UnifiedIntentMetadataExtractor:
 
         return result
 
+    @classmethod
+    def _extract_explicit_email(cls, user_input: str) -> str | None:
+        """Extract an email written by the user, independent of the LLM."""
+        match = cls.EXPLICIT_EMAIL_PATTERN.search(user_input)
+        return match.group("email") if match else None
+
     @staticmethod
     def _extract_response_text(content: Any) -> str:
         if isinstance(content, str) and content.strip():
@@ -559,6 +570,16 @@ class UnifiedIntentMetadataExtractor:
             field: cls._normalize_optional_string(raw_metadata.get(field))
             for field in cls.STRING_METADATA_FIELDS
         }
+
+        explicit_email = cls._extract_explicit_email(user_input)
+        if explicit_email:
+            normalized_metadata["email"] = explicit_email
+            normalized_metadata["username"] = explicit_email.split("@", 1)[0]
+            normalized_metadata["username_source"] = "explicit_email"
+            logger.info(
+                "EXPLICIT_EMAIL_RESOLVED | email={} | source=user_input",
+                explicit_email,
+            )
 
         normalized_metadata["cpu_count"] = cls._normalize_integer(
             raw_metadata.get("cpu_count")

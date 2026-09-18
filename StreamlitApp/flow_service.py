@@ -463,6 +463,10 @@ from loguru import logger  # noqa: E402
 
 from App.utils.config import Config  # noqa: E402
 
+# --- ADDED FOR OPERATION AUDIT (Amit Bhagat) ---
+from App.db.operation_audit import close_request, open_request  # noqa: E402
+# --- END ADDED FOR OPERATION AUDIT ---
+
 # --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
 from App.services.email_service import EmailConfig, send_password_email  # noqa: E402
 from App.services.password_file import generate_password_file  # noqa: E402
@@ -594,6 +598,20 @@ class FlowService:
             self._windows_identity(),
         )
 
+        # --- ADDED FOR OPERATION AUDIT (Amit Bhagat) ---
+        # Written before the flow runs, so a request that crashes or is
+        # abandoned mid-approval is still recorded. A confirmed retry reuses
+        # the original request_id, so its row already exists and only needs
+        # closing again with the new outcome.
+        if not confirmed:
+            open_request(
+                request_id=resolved_request_id,
+                user_query=normalized_query,
+                requested_by=self.requester_id,
+                source_channel="WEB",
+            )
+        # --- END ADDED FOR OPERATION AUDIT ---
+
         try:
             workflow_response = self.demo.execute_flow(
                 user_input=normalized_query,
@@ -641,6 +659,14 @@ class FlowService:
                 dashboard_secret is not None,
             )
 
+            # --- ADDED FOR OPERATION AUDIT (Amit Bhagat) ---
+            # Fills in the operation, the masked target, the confidence and the
+            # final lifecycle status. Called with safe_response, which has
+            # already been through the output guardrails, so no credential can
+            # reach the audit table.
+            close_request(resolved_request_id, safe_response)
+            # --- END ADDED FOR OPERATION AUDIT ---
+
             return safe_response
 
         except Exception as exc:
@@ -649,6 +675,19 @@ class FlowService:
                 resolved_request_id,
                 type(exc).__name__,
             )
+
+            # --- ADDED FOR OPERATION AUDIT (Amit Bhagat) ---
+            # A crash is an outcome too. Without this the row would stay at
+            # RECEIVED and look like an abandoned request.
+            close_request(
+                resolved_request_id,
+                {
+                    "success": False,
+                    "user_input": normalized_query,
+                    "error": type(exc).__name__,
+                },
+            )
+            # --- END ADDED FOR OPERATION AUDIT ---
 
             return {
                 "success": False,
