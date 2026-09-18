@@ -37,3 +37,8 @@ mcp[cli]>=2.0,<3.0
 
 streamlit
 Authlib>=1.3.2
+
+sqlalchemy
+psycopg2-binary
+pydantic-settings
+python-dotenv
