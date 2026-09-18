@@ -11,7 +11,8 @@ TODO: Implement tests
 """
 
 import pytest
-# TODO: from App.intent.classifier import IntentClassifier
+
+from App.intent.unified_extractor import UnifiedIntentMetadataExtractor
 
 
 def test_intent_classification_password_reset():
@@ -27,3 +28,23 @@ def test_intent_classification_invalid_input():
 def test_intent_confidence_score():
     """TODO: Test confidence score calculation"""
     pass
+
+
+def test_explicit_email_overrides_model_metadata():
+    """The requested email must be used instead of incorrect model output."""
+
+    result = UnifiedIntentMetadataExtractor._prepare_result(
+        raw_result={
+            "intent": "get_user_details",
+            "confidence": 0.2,
+            "explanation": "User lookup",
+            "metadata": {
+                "email": "aman.14.gupta@coforge.com",
+                "username": "aman.14.gupta",
+            },
+        },
+        user_input="get user detail amit.bhagat@coforge.com",
+    )
+
+    assert result["metadata"]["email"] == "amit.bhagat@coforge.com"
+    assert result["metadata"]["username"] == "amit.bhagat"
