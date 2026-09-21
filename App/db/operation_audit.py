@@ -508,6 +508,51 @@ def open_request(
         )
 
 
+def get_user_request_history(
+    user_id: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Return recent password-safe requests submitted by one app user."""
+
+    requester_id = _optional_uuid(user_id)
+    if requester_id is None:
+        return []
+
+    try:
+        with SessionLocal() as session:
+            statement = (
+                select(OperationRequest, Operation.operation_name)
+                .outerjoin(
+                    Operation,
+                    Operation.operation_id == OperationRequest.operation_id,
+                )
+                .where(OperationRequest.requested_by == requester_id)
+                .order_by(OperationRequest.requested_at.desc())
+                .limit(max(1, min(int(limit), 100)))
+            )
+            rows = session.execute(statement).all()
+
+        return [
+            {
+                "request_id": str(request.request_id),
+                "request": request.original_request or "",
+                "operation": operation_name or "Identity request",
+                "target": request.target_reference or "",
+                "status": request.status,
+                "requested_at": request.requested_at,
+            }
+            for request, operation_name in rows
+        ]
+    except Exception as exc:
+        logger.error(
+            "AUDIT_REQUEST_HISTORY_FAILED | user_id={} | error_type={} | detail={}",
+            requester_id,
+            type(exc).__name__,
+            _error_detail(exc),
+        )
+        return []
+
+
 def status_for(response: Dict[str, Any]) -> str:
     """
     Map a flow response to a request lifecycle status.

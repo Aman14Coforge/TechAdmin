@@ -43,6 +43,7 @@ from flow_service import (
 
 # --- ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat) ---
 from App.db.login_authorization import authorize_claims, extract_display_name
+from App.db.operation_audit import get_user_request_history
 # --- END ADDED FOR APP_USERS LOGIN CHECK ---
 # --- END ADDED FOR PASSWORD ENHANCEMENTS ---
 
@@ -1327,6 +1328,32 @@ def render_sidebar() -> None:
     """Render environment, examples, and session controls."""
 
     with st.sidebar:
+        app_user_access = st.session_state.get("app_user_access")
+        user_id = (
+            app_user_access.get("user_id")
+            if isinstance(app_user_access, dict)
+            else None
+        )
+        if user_id:
+            st.subheader("Your recent requests")
+            history = get_user_request_history(user_id)
+            if history:
+                for item in history:
+                    requested_at = item.get("requested_at")
+                    if isinstance(requested_at, datetime):
+                        requested_at = requested_at.strftime("%b %d, %H:%M")
+
+                    label = item["request"].strip() or item["operation"]
+                    st.caption(label[:120])
+                    st.caption(
+                        f"{item['status'].title()} | "
+                        f"{requested_at or 'Unknown time'}"
+                    )
+            else:
+                st.caption("No requests recorded yet.")
+
+            st.divider()
+
         st.header("System status")
 
         status = get_config_status()
