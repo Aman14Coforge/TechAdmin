@@ -5,4 +5,4 @@ headless = true
 
 [browser]
 serverAddress = "techadmin.coforge.com"
-serverPort = 80
+serverPort = 443
