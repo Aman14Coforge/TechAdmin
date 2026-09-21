@@ -1,12 +1,14 @@
 """
-Streamlit Flow Service
+Streamlit Flow Service backed by the TechAdmin LangGraph.
 
-Purpose:
-    Connect the Streamlit UI to the existing TechAdmin DemoFlow while
-    preserving guardrail confirmation, requester context, correlation IDs,
-    MCP execution evidence, and temporary-password dashboard handling.
+Preserves:
+    - App-user login authorization in Streamlit app.py
+    - Request and correlation ID reuse
+    - Guardrail confirmation workflow
+    - Operation-audit database lifecycle
+    - Secure password vault, download, and explicit manager email
+    - Existing UI helper contracts
 """
-
 from __future__ import annotations
 
 import copy
@@ -49,18 +51,12 @@ load_dotenv(
 
 from loguru import logger  # noqa: E402
 
-from App.utils.config import Config  # noqa: E402
-
-# --- ADDED FOR OPERATION AUDIT (Amit Bhagat) ---
 from App.db.operation_audit import close_request, open_request  # noqa: E402
-# --- END ADDED FOR OPERATION AUDIT ---
-
-# --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
 from App.services.email_service import EmailConfig, send_password_email  # noqa: E402
 from App.services.password_file import generate_password_file  # noqa: E402
 from App.services.password_vault import password_vault  # noqa: E402
-# --- END ADDED FOR PASSWORD ENHANCEMENTS ---
-from Scripts.demo_flow import DemoFlow  # noqa: E402
+from App.utils.config import Config  # noqa: E402
+from App.workflow.graph import TechAdminWorkflow  # noqa: E402
 
 
 LOG_FILE = PROJECT_ROOT / "logs" / "techadmin.log"
@@ -68,15 +64,16 @@ LOG_FILE = PROJECT_ROOT / "logs" / "techadmin.log"
 
 class FlowService:
     """
-    Run user requests through the complete TechAdmin workflow.
+    Connect the Streamlit UI to the compiled TechAdmin LangGraph.
 
-    The service passes trusted confirmation and caller context to DemoFlow.
-    A generated temporary password is separated from the ordinary response
-    so the Streamlit UI can display it in its dedicated dashboard section.
+    FlowService remains a boundary adapter. Business orchestration is owned by
+    App.workflow.graph.TechAdminWorkflow. This class owns UI-channel concerns:
+    identity context, operation-audit lifecycle, exception containment, and
+    non-sensitive execution context added to the response.
     """
 
     def __init__(self) -> None:
-        self.demo = DemoFlow()
+        self.workflow = TechAdminWorkflow()
 
         self.requester_id = (
             os.getenv("TECHADMIN_REQUESTER_ID")
@@ -93,9 +90,10 @@ class FlowService:
 
         logger.info(
             "FLOW_SERVICE_INITIALIZED | "
-            "demo_flow={} | requester_id={} | requester_role={} | "
+            "orchestration=langgraph | workflow={} | "
+            "requester_id={} | requester_role={} | "
             "execution_identity={}",
-            type(self.demo).__name__,
+            type(self.workflow).__name__,
             self.requester_id,
             self.requester_role,
             self._windows_identity(),
@@ -103,7 +101,7 @@ class FlowService:
 
     @staticmethod
     def _windows_identity() -> str:
-        """Return the account that owns the current Streamlit process."""
+        """Return the operating-system account running Streamlit."""
 
         domain = os.getenv("USERDOMAIN", "").strip()
         username = getpass.getuser().strip()
@@ -113,26 +111,55 @@ class FlowService:
 
         return username
 
-    # --- CHANGED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
     @staticmethod
     def _extract_dashboard_password(
         response: Dict[str, Any],
     ) -> Dict[str, Any] | None:
         """
-        Retained as a no-op so existing call sites keep working.
+        Retain the historical method contract as a secure no-op.
 
-        This used to pull the generated password out of the response and hand
-        it to a dashboard panel that printed it in the browser. The
-        specification forbids the original password appearing on the UI or in
-        an API response at all, so there is nothing left to extract: the reset
-        tool now returns masked_password and password_token instead, and the
-        original never leaves the server.
-
-        Returns:
-            Always None.
+        Password reset now returns a masked password and opaque password token.
+        The original password stays in the server-side password vault and must
+        never be moved into Streamlit response state.
         """
+
+        del response
         return None
-    # --- END CHANGED FOR PASSWORD ENHANCEMENTS ---
+
+    @staticmethod
+    def _failure_response(
+        *,
+        request_id: str,
+        correlation_id: str,
+        error_type: str,
+        execution_identity: str,
+        requester_id: str,
+        requester_role: str,
+    ) -> Dict[str, Any]:
+        """Build the stable UI response contract for an unexpected failure."""
+
+        return {
+            "success": False,
+            "request_id": request_id,
+            "correlation_id": correlation_id,
+            "intent": None,
+            "message": (
+                "An unexpected error occurred while processing the request."
+            ),
+            "metadata": {},
+            "result": None,
+            "error": error_type,
+            "orchestration": {
+                "engine": "langgraph",
+                "graph": "TechAdminWorkflow",
+                "compiled": True,
+            },
+            "execution_context": {
+                "windows_identity": execution_identity,
+                "requester_id": requester_id,
+                "requester_role": requester_role,
+            },
+        }
 
     def run_query(
         self,
@@ -144,11 +171,11 @@ class FlowService:
         requester_id: str | None = None,
     ) -> Dict[str, Any]:
         """
-        Run one user request through DemoFlow.
+        Run one Streamlit request through the compiled LangGraph.
 
-        `confirmed=True` must come only from the Streamlit confirmation
-        control. The same request and correlation IDs are reused for the
-        confirmed retry.
+        A fresh request opens an operation-audit row. A confirmation retry uses
+        the same request ID and updates the existing row. Every completed graph
+        response and every controlled exception closes the audit lifecycle.
         """
 
         normalized_query = (
@@ -161,7 +188,12 @@ class FlowService:
             request_id
             or f"ui_{uuid.uuid4().hex[:8]}"
         )
+        resolved_correlation_id = (
+            correlation_id
+            or f"corr_{uuid.uuid4().hex}"
+        )
         resolved_requester_id = requester_id or self.requester_id
+        execution_identity = self._windows_identity()
 
         if not normalized_query:
             return {
@@ -178,21 +210,19 @@ class FlowService:
         logger.info(
             "UI_QUERY_RECEIVED | request_id={} | correlation_id={} | "
             "query_length={} | confirmed={} | requester_id={} | "
-            "requester_role={} | execution_identity={}",
+            "requester_role={} | execution_identity={} | "
+            "orchestration=langgraph",
             resolved_request_id,
-            correlation_id,
+            resolved_correlation_id,
             len(normalized_query),
             confirmed,
             resolved_requester_id,
             self.requester_role,
-            self._windows_identity(),
+            execution_identity,
         )
 
-        # --- ADDED FOR OPERATION AUDIT (Amit Bhagat) ---
-        # Written before the flow runs, so a request that crashes or is
-        # abandoned mid-approval is still recorded. A confirmed retry reuses
-        # the original request_id, so its row already exists and only needs
-        # closing again with the new outcome.
+        # Open only for the first submission. The trusted confirmation retry
+        # reuses the same request ID and updates the already existing row.
         if not confirmed:
             open_request(
                 request_id=resolved_request_id,
@@ -203,10 +233,10 @@ class FlowService:
         # --- END ADDED FOR OPERATION AUDIT ---
 
         try:
-            workflow_response = self.demo.execute_flow(
+            workflow_response = self.workflow.invoke(
                 user_input=normalized_query,
                 request_id=resolved_request_id,
-                correlation_id=correlation_id,
+                correlation_id=resolved_correlation_id,
                 confirmed=bool(confirmed),
                 requester_id=resolved_requester_id,
                 requester_role=self.requester_role,
@@ -214,22 +244,22 @@ class FlowService:
 
             if not isinstance(workflow_response, dict):
                 raise TypeError(
-                    "DemoFlow.execute_flow() returned a non-dictionary response."
+                    "TechAdminWorkflow.invoke() returned a "
+                    "non-dictionary response."
                 )
 
-            safe_response = copy.deepcopy(
-                workflow_response
-            )
+            safe_response = copy.deepcopy(workflow_response)
 
+            # Kept for compatibility with app.py. Current secure password
+            # handling always returns None here.
             dashboard_secret = self._extract_dashboard_password(
                 safe_response
             )
-
             if dashboard_secret is not None:
                 safe_response["_dashboard_secret"] = dashboard_secret
 
             safe_response["execution_context"] = {
-                "windows_identity": self._windows_identity(),
+                "windows_identity": execution_identity,
                 "requester_id": resolved_requester_id,
                 "requester_role": self.requester_role,
             }
@@ -238,7 +268,7 @@ class FlowService:
                 "UI_QUERY_COMPLETED | request_id={} | correlation_id={} | "
                 "intent={} | success={} | guardrail_action={} | "
                 "confirmation_required={} | confirmed={} | "
-                "dashboard_secret_present={}",
+                "dashboard_secret_present={} | orchestration=langgraph",
                 safe_response.get("request_id"),
                 safe_response.get("correlation_id"),
                 safe_response.get("intent"),
@@ -249,20 +279,28 @@ class FlowService:
                 dashboard_secret is not None,
             )
 
-            # --- ADDED FOR OPERATION AUDIT (Amit Bhagat) ---
-            # Fills in the operation, the masked target, the confidence and the
-            # final lifecycle status. Called with safe_response, which has
-            # already been through the output guardrails, so no credential can
-            # reach the audit table.
-            close_request(resolved_request_id, safe_response)
-            # --- END ADDED FOR OPERATION AUDIT ---
+            try:
+                # safe_response has already passed graph output sanitization.
+                close_request(
+                    resolved_request_id,
+                    safe_response,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "OPERATION_AUDIT_CLOSE_FAILED | request_id={} | "
+                    "error_type={}",
+                    resolved_request_id,
+                    type(exc).__name__,
+                )
 
             return safe_response
 
         except Exception as exc:
             logger.exception(
-                "UI_QUERY_FAILED | request_id={} | error_type={}",
+                "UI_QUERY_FAILED | request_id={} | correlation_id={} | "
+                "error_type={}",
                 resolved_request_id,
+                resolved_correlation_id,
                 type(exc).__name__,
             )
 
@@ -291,7 +329,7 @@ class FlowService:
                 "result": None,
                 "error": type(exc).__name__,
                 "execution_context": {
-                    "windows_identity": self._windows_identity(),
+                    "windows_identity": execution_identity,
                     "requester_id": resolved_requester_id,
                     "requester_role": self.requester_role,
                 },
@@ -336,6 +374,8 @@ def get_config_status() -> Dict[str, Any]:
         "graph_client_secret": bool(Config.GRAPH_CLIENT_SECRET),
         "graph_tenant_id": bool(Config.GRAPH_TENANT_ID),
         "config_valid": Config.validate(),
+        "orchestration_engine": "langgraph",
+        "operation_audit_enabled": True,
         "execution_identity": execution_identity,
         "execution_computer": os.getenv("COMPUTERNAME"),
         "requester_id": (
@@ -410,25 +450,23 @@ def check_ollama() -> tuple[bool, str]:
         )
 
 
-# --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
+# ---------------------------------------------------------------------------
+# Secure password-delivery helpers
+# ---------------------------------------------------------------------------
+
+
 def build_password_download(password_token: str):
-    """
-    Build the TXT file for a completed reset.
+    """Build a password TXT file from a valid server-side vault token."""
 
-    The UI never holds the original password. It holds the token, hands it
-    here, and gets back content for a download button. The password exists only
-    inside the returned text.
-
-    Args:
-        password_token: Token from the reset result.
-
-    Returns:
-        Tuple of (ok, filename, content, message).
-    """
     entry = password_vault.get(password_token)
 
     if entry is None:
-        return False, None, None, "That password reset is no longer available. Run the reset again."
+        return (
+            False,
+            None,
+            None,
+            "That password reset is no longer available. Run the reset again.",
+        )
 
     return generate_password_file(
         username=entry.username,
@@ -439,23 +477,16 @@ def build_password_download(password_token: str):
 
 
 def send_password_to_manager(password_token: str):
-    """
-    Send the temporary password to the manager.
+    """Send a temporary password only after an explicit UI action."""
 
-    Reached only from the explicit button. Nothing in the reset path calls this
-    function, which is what keeps the "no automatic emails" rule true by
-    construction rather than by convention.
-
-    Args:
-        password_token: Token from the reset result.
-
-    Returns:
-        Tuple of (sent, message, recipient).
-    """
     entry = password_vault.get(password_token)
 
     if entry is None:
-        return False, "That password reset is no longer available. Run the reset again.", ""
+        return (
+            False,
+            "That password reset is no longer available. Run the reset again.",
+            "",
+        )
 
     sent, message = send_password_email(
         manager_email=entry.manager_email,
@@ -465,10 +496,14 @@ def send_password_to_manager(password_token: str):
         password=entry.password,
     )
 
-    return sent, message, entry.manager_email if sent else ""
+    return (
+        sent,
+        message,
+        entry.manager_email if sent else "",
+    )
 
 
 def email_is_configured() -> bool:
-    """Report whether SMTP settings are present, for the sidebar."""
+    """Report whether SMTP settings are present."""
+
     return EmailConfig.is_configured()
-# --- END ADDED FOR PASSWORD ENHANCEMENTS ---

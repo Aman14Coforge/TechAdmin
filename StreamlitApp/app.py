@@ -1,21 +1,26 @@
 """
-TechAdmin Streamlit UI with guardrail confirmation and session password display.
-
+TechAdmin Streamlit UI with Microsoft authentication, app_users authorization,
+LangGraph workflow execution, operation auditing, secure password delivery,
+and CrowdStrike failed-login/account-lockout investigation reporting.
+ 
 Features:
-    - Structured tables only for workflow results.
+    - Microsoft Entra sign-in through Streamlit OIDC.
+    - Configured local Test account sign-in.
+    - app_users database authorization for Microsoft and Test identities.
+    - Structured workflow-result tables.
+    - Dedicated CrowdStrike failed-login and account-lockout report.
     - Guardrail confirmation controls for sensitive operations.
-    - Reuses request ID and correlation ID after confirmation.
-    - Displays generated temporary passwords in a dedicated session panel.
-    - Removes the dashboard-only secret before conversation history and JSON download.
-    - Supports Microsoft Graph and PowerShell result shapes.
-    - Avoids conditional Streamlit expressions that can render DeltaGenerator details.
-
+    - Request ID and correlation ID reuse after confirmation.
+    - Secure password TXT download and explicit manager email.
+    - Password-safe conversation history and JSON download.
+    - Microsoft Graph, PowerShell, MCP, and LangGraph result support.
+ 
 Run from the project root:
     python -m streamlit run StreamlitApp/app.py
 """
-
+ 
 from __future__ import annotations
-
+ 
 import copy
 import html
 import hmac
@@ -23,40 +28,69 @@ import json
 import os
 from datetime import datetime
 from typing import Any, Dict, Iterable
-
+ 
 import pandas as pd
 import streamlit as st
-
+ 
 from flow_service import (
     LOG_FILE,
     FlowService,
-    check_ollama,
-    get_config_status,
-)
-
-# --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
-from flow_service import (
     build_password_download,
+    check_ollama,
     email_is_configured,
+    get_config_status,
     send_password_to_manager,
 )
-
-# --- ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat) ---
 from App.db.login_authorization import authorize_claims, extract_display_name
 from App.db.operation_audit import get_user_request_history
-# --- END ADDED FOR APP_USERS LOGIN CHECK ---
-# --- END ADDED FOR PASSWORD ENHANCEMENTS ---
-
-
+from investigation_report_ui import render_investigation_report
+ 
+ 
 # ---------------------------------------------------------------------------
-# Page configuration
+# Page configuration and styling
 # ---------------------------------------------------------------------------
-
+ 
 st.set_page_config(
     page_title="TechAdmin",
     page_icon="🛠️",
     layout="wide",
 )
+
+
+def enforce_https_origin() -> None:
+    """Redirect insecure browser access to the public HTTPS origin."""
+
+    public_url = (
+        os.getenv("TECHADMIN_PUBLIC_URL", "https://techadmin.coforge.com")
+        .strip()
+    )
+    if not public_url:
+        return
+
+    st.markdown(
+        f"""
+        <script>
+        (() => {{
+            try {{
+                const publicUrl = new URL("{public_url}");
+                const current = new URL(window.location.href);
+                const sameHost = current.hostname === publicUrl.hostname;
+                const needsHttps = current.protocol === "http:" && sameHost;
+                if (needsHttps) {{
+                    const target = new URL(window.location.href);
+                    target.protocol = "https:";
+                    target.port = publicUrl.port || "";
+                    window.location.replace(target.toString());
+                }}
+            }} catch (e) {{}}
+        }})();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+enforce_https_origin()
 
 st.markdown(
     """
@@ -69,33 +103,21 @@ st.markdown(
         --tech-line: #d9e2ec;
         --tech-warm: #f7f4ee;
     }
-
+ 
     [data-testid="stSidebar"] {
         border-right: 1px solid var(--tech-line);
     }
-
+ 
     [data-testid="stSidebar"] > div:first-child {
         padding-top: 2rem;
     }
-
-    .tech-hero {
-        padding: 1rem 0 1.25rem;
-        border-bottom: 1px solid var(--tech-line);
-        margin-bottom: 1.5rem;
-        text-align: left;
-    }
-
+ 
     .sidebar-brand {
         border-bottom: 1px solid var(--tech-line);
         margin: 0 0 1.5rem;
         padding: 0 0 1.25rem;
     }
-
-    .sidebar-brand .tech-kicker {
-        font-size: 0.72rem;
-        line-height: 1.4;
-    }
-
+ 
     .sidebar-brand .company-name {
         color: #0d4f87;
         font-size: 1.25rem;
@@ -103,45 +125,22 @@ st.markdown(
         letter-spacing: 0.08em;
         text-transform: uppercase;
     }
-
+ 
     .sidebar-brand h1 {
         color: var(--tech-ink);
         font-size: 1.8rem;
         line-height: 1;
         margin: 0.45rem 0 0;
     }
-
+ 
     .tech-kicker {
         color: var(--tech-blue);
         font-size: 0.75rem;
         font-weight: 700;
         letter-spacing: 0.12em;
         text-transform: uppercase;
-        margin-bottom: 0.5rem;
-        text-align: left;
     }
-
-    .tech-brand {
-        color: #0d4f87;
-        font-size: 1rem;
-        font-weight: 800;
-        letter-spacing: 0.16em;
-        margin-left: 0.35rem;
-    }
-
-    .tech-hero h1 {
-        color: var(--tech-ink);
-        font-size: clamp(2rem, 4vw, 3.4rem);
-        line-height: 1.05;
-        margin: 0;
-    }
-
-    .tech-hero p {
-        color: var(--tech-muted);
-        font-size: 1rem;
-        margin: 0.85rem 0 0;
-    }
-
+ 
     .tech-panel {
         background: linear-gradient(135deg, var(--tech-blue-soft), #fff);
         border: 1px solid #cfe3f2;
@@ -149,22 +148,22 @@ st.markdown(
         padding: 1.25rem 1.35rem;
         margin: 0.5rem 0 1.25rem;
     }
-
+ 
     .tech-panel strong {
         color: var(--tech-ink);
         display: block;
         font-size: 1.05rem;
         margin-bottom: 0.3rem;
     }
-
+ 
     .tech-panel span {
         color: var(--tech-muted);
     }
-
+ 
     div[data-testid="stChatInput"] {
         margin-top: 1rem;
     }
-
+ 
     .operation-card {
         border: 1px solid var(--tech-line);
         border-left: 4px solid var(--tech-blue);
@@ -173,11 +172,19 @@ st.markdown(
         margin: 1rem 0 1.25rem;
         background: #fff;
     }
-
-    .operation-card.success { border-left-color: #18864b; }
-    .operation-card.warning { border-left-color: #b7791f; }
-    .operation-card.failure { border-left-color: #c53030; }
-
+ 
+    .operation-card.success {
+        border-left-color: #18864b;
+    }
+ 
+    .operation-card.warning {
+        border-left-color: #b7791f;
+    }
+ 
+    .operation-card.failure {
+        border-left-color: #c53030;
+    }
+ 
     .operation-label {
         color: var(--tech-muted);
         font-size: 0.72rem;
@@ -185,14 +192,14 @@ st.markdown(
         letter-spacing: 0.08em;
         text-transform: uppercase;
     }
-
+ 
     .operation-title {
         color: var(--tech-ink);
         font-size: 1.2rem;
         font-weight: 700;
         margin-top: 0.25rem;
     }
-
+ 
     .operation-meta {
         color: var(--tech-muted);
         margin-top: 0.45rem;
@@ -201,50 +208,87 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-
-# --- ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat) ---
+ 
+ 
+# ---------------------------------------------------------------------------
+# Authentication and app_users authorization
+# ---------------------------------------------------------------------------
+ 
+ 
+def microsoft_user_is_logged_in() -> bool:
+    """Safely determine whether Streamlit has a Microsoft login session."""
+ 
+    try:
+        return bool(st.user.is_logged_in)
+    except (AttributeError, RuntimeError, TypeError):
+        return False
+ 
+ 
+def clear_local_authentication_state() -> None:
+    """Clear cached local identity and app_users authorization state."""
+ 
+    st.session_state.pop("local_authenticated_user", None)
+    st.session_state.pop("app_user_access", None)
+ 
+ 
+def render_sign_in_screen(
+    *,
+    microsoft_message: str | None = None,
+) -> None:
+    """Render both Microsoft SSO and Test account sign-in choices."""
+ 
+    st.title("TechAdmin")
+    st.subheader("Sign in to TechAdmin")
+ 
+    if microsoft_message:
+        st.warning(microsoft_message)
+ 
+    microsoft_tab, local_tab = st.tabs(
+        ["Microsoft SSO", "Test account"]
+    )
+ 
+    with microsoft_tab:
+        st.write("Use your Coforge Microsoft account.")
+ 
+        if st.button(
+            "Sign in with Microsoft",
+            type="primary",
+            width="stretch",
+            key="microsoft_sign_in",
+        ):
+            st.login()
+ 
+    with local_tab:
+        render_local_login()
+ 
+    st.stop()
+ 
+ 
 def enforce_app_user_access(claims: dict[str, Any]) -> None:
-    """
-    Allow only people whose display name is registered in app_users.
-
-    Signing in with Microsoft proves identity. It does not grant access to this
-    application: the display name on the sign-in must also match an active row
-    in the app_users table.
-
-    The decision is cached in the session, so the database is queried once per
-    sign-in rather than on every Streamlit rerun, which would be several
-    queries per click.
-
-    Args:
-        claims: The sign-in claims from Entra or the local test account.
-
-    Returns:
-        None. A refused user is shown the reason and the script is stopped, so
-        nothing below this point renders.
-    """
+    """Authorize an authenticated identity against the app_users database."""
+ 
     display_name = extract_display_name(claims)
-
-    # The earlier login flow allowed an SSO or local test-user sign-in to proceed
-    # even when the identity provider did not send a display name. We retain
-    # that behavior here so a real login is not blocked by a missing claim value.
+ 
+    # Preserve legacy claim-shape compatibility. Microsoft sessions with no
+    # usable identity are intercepted in require_authentication() before here.
     if not display_name:
         st.session_state.app_user_access = {
             "display_name": "",
             "allowed": True,
-            "reason": "legacy_sso_login",
+            "reason": "legacy_identity_without_display_name",
             "message": "",
             "user_principal_name": "",
             "user_id": "",
             "department": "",
         }
         return
-
+ 
     cached = st.session_state.get("app_user_access")
-
-    # Re-check whenever the signed-in person changes, so a sign-out followed by
-    # a different sign-in cannot inherit the previous decision.
-    if not (isinstance(cached, dict) and cached.get("display_name") == display_name):
+ 
+    if not (
+        isinstance(cached, dict)
+        and cached.get("display_name") == display_name
+    ):
         decision = authorize_claims(claims)
         cached = {
             "display_name": display_name,
@@ -256,232 +300,177 @@ def enforce_app_user_access(claims: dict[str, Any]) -> None:
             "department": decision.department,
         }
         st.session_state.app_user_access = cached
-
-    if cached["allowed"]:
+ 
+    if cached.get("allowed") is True:
         return
-
+ 
     st.title("TechAdmin")
-    st.error(cached["message"])
+    st.error(
+        cached.get("message")
+        or "This identity is not authorized to use TechAdmin."
+    )
     st.caption(
         f"Signed in as: {display_name or 'unknown'}. "
-        "Access is granted only to users registered in the TechAdmin "
-        "app_users directory."
+        "Access is granted only to active users registered in the "
+        "TechAdmin app_users directory."
     )
-
-    if st.button("Sign out", key="denied_sign_out"):
-        st.session_state.pop("app_user_access", None)
-        st.session_state.pop("local_authenticated_user", None)
-        if claims.get("auth_source") != "local_test_account":
+ 
+    if claims.get("auth_source") == "local_test_account":
+        if st.button(
+            "Return to sign in",
+            key="denied_local_sign_out",
+            width="content",
+        ):
+            clear_local_authentication_state()
+            st.rerun()
+    else:
+        if st.button(
+            "Sign out",
+            key="denied_microsoft_sign_out",
+            width="content",
+        ):
+            clear_local_authentication_state()
             st.logout()
-        st.rerun()
-
+ 
     st.stop()
-# --- END ADDED FOR APP_USERS LOGIN CHECK ---
-
-
+ 
+ 
 def require_authentication() -> dict[str, Any]:
-    """Require a Microsoft Entra session before loading the dashboard."""
-
+    """Require Microsoft Entra or configured Test account authentication."""
+ 
     local_user = st.session_state.get("local_authenticated_user")
+ 
     if isinstance(local_user, dict):
-        # ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat)
         enforce_app_user_access(local_user)
         render_authenticated_user(local_user)
         return local_user
-
-    # if not st.user.is_logged_in:
-    #     st.title("TechAdmin")
-    #     st.subheader("Sign in to TechAdmin")
-
-    #     microsoft_tab, local_tab = st.tabs(
-    #         ["Microsoft SSO", "Test account"]
-    #     )
-
-    #     with microsoft_tab:
-    #         st.write("Use your Coforge Microsoft account.")
-    #         if st.button(
-    #             "Sign in with Microsoft",
-    #             type="primary",
-    #             width="stretch",
-    #         ):
-    #             st.login()
-
-    #     with local_tab:
-    #         render_local_login()
-
-    #     st.stop()
-
-    # Local development mode
-    if not st.user:
-
-        # If local login is enabled, skip Entra validation
-        if (
-            os.getenv(
-                "TECHADMIN_LOCAL_LOGIN_ENABLED",
-                "false"
-            ).casefold()
-            == "true"
-        ):
-            st.title("TechAdmin")
-            st.subheader("Local Development Login")
-
-            render_local_login()
-            st.stop()
-
+ 
+    # Do not use `if not st.user`. st.user is a proxy object and can exist even
+    # when the browser has no usable authenticated identity.
+    if not microsoft_user_is_logged_in():
+        render_sign_in_screen()
+ 
+    claims = dict(st.user)
+    claims.pop("is_logged_in", None)
+ 
+    if not extract_display_name(claims):
+        # Keep Test account available if the Microsoft cookie is stale or its
+        # identity token does not contain the application's expected claims.
         st.title("TechAdmin")
-        st.subheader("Sign in to TechAdmin")
-
+        st.warning(
+            "The current Microsoft session does not contain a usable identity."
+        )
+ 
         microsoft_tab, local_tab = st.tabs(
             ["Microsoft SSO", "Test account"]
         )
-
+ 
         with microsoft_tab:
-            st.write("Use your Coforge Microsoft account.")
+            st.write(
+                "Sign out of the incomplete Microsoft session, then start "
+                "Microsoft sign-in again."
+            )
+ 
             if st.button(
-                "Sign in with Microsoft",
+                "Sign out and restart",
                 type="primary",
                 width="stretch",
+                key="restart_microsoft_sign_in",
             ):
-                st.login()
-
-        with local_tab:
-            render_local_login()
-
-        st.stop()
-
-    # is_local_login_enabled = (
-    #     os.getenv(
-    #         "TECHADMIN_LOCAL_LOGIN_ENABLED",
-    #         "false"
-    #     ).casefold() == "true"
-    # )
-
-    # # Entra not configured and local login enabled
-    # if not st.user and is_local_login_enabled:
-    #     st.title("TechAdmin")
-    #     st.subheader("Sign in to TechAdmin")
-
-    #     render_local_login()
-    #     st.stop()
-
-    # if not st.user:
-    #     st.title("TechAdmin")
-    #     st.subheader("Sign in to TechAdmin")
-
-    #     microsoft_tab, local_tab = st.tabs(
-    #         ["Microsoft SSO", "Test account"]
-    #     )
-
-    #     with microsoft_tab:
-    #         st.write("Use your Coforge Microsoft account.")
-    #         if st.button(
-    #             "Sign in with Microsoft",
-    #             type="primary",
-    #             width="stretch",
-    #         ):
-    #             st.login()
-
-    # with local_tab:
-    #     render_local_login()
-
-    # st.stop()
-
-    claims = dict(st.user)
-
-    # If the auth session exists but does not contain a usable identity, fall
-    # back to the original sign-in chooser instead of entering the dashboard on a
-    # stale/blank OAuth session.
-    if not extract_display_name(claims):
-        st.title("TechAdmin")
-        st.subheader("Sign in to TechAdmin")
-
-        microsoft_tab, local_tab = st.tabs(["Microsoft SSO", "Test account"])
-
-        with microsoft_tab:
-            st.write("Use your Coforge Microsoft account.")
-            if st.button(
-                "Sign in with Microsoft",
-                type="primary",
-                width="stretch",
-            ):
+                clear_local_authentication_state()
+                # Do not call st.login immediately afterward. st.logout removes
+                # the identity cookie and redirects/reruns the app.
                 st.logout()
-                st.login()
-
+ 
         with local_tab:
             render_local_login()
-
+ 
         st.stop()
-
-    # Tenant restriction temporarily disabled while the Entra tenant config is
-    # being aligned. Re-enable this check only after the target tenant ID is
-    # confirmed and the production SSO configuration matches it.
+ 
+    # Tenant restriction can be re-enabled after production alignment.
     # expected_tenant = str(
     #     st.secrets.get("entra", {}).get("allowed_tenant_id", "")
     # ).strip()
     # actual_tenant = str(claims.get("tid", "")).strip()
     # if expected_tenant and actual_tenant != expected_tenant:
     #     st.error("This Microsoft tenant is not authorized for TechAdmin.")
-    #     if st.button("Sign out", width="content"):
+    #     if st.button("Sign out", key="unauthorized_tenant_sign_out"):
+    #         clear_local_authentication_state()
     #         st.logout()
     #     st.stop()
-
-    # ADDED FOR APP_USERS LOGIN CHECK (Amit Bhagat)
+ 
     enforce_app_user_access(claims)
-
     render_authenticated_user(claims)
-
     return claims
-
-
+ 
+ 
 def render_local_login() -> None:
-    """Authenticate the explicitly configured local development account."""
-
-    if os.getenv("TECHADMIN_LOCAL_LOGIN_ENABLED", "false").casefold() != "true":
+    """Authenticate the explicitly configured Test account."""
+ 
+    local_login_enabled = (
+        os.getenv("TECHADMIN_LOCAL_LOGIN_ENABLED", "false")
+        .strip()
+        .casefold()
+        in {"1", "true", "yes", "on"}
+    )
+ 
+    if not local_login_enabled:
         st.info("The local test account is disabled.")
         return
-
-    with st.form("local_login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
+ 
+    with st.form("local_login_form", clear_on_submit=False):
+        username = st.text_input(
+            "Username",
+            key="local_login_username",
+        )
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="local_login_password",
+        )
         submitted = st.form_submit_button(
             "Sign in",
             type="primary",
             width="stretch",
         )
-
+ 
     if not submitted:
         return
-
+ 
     expected_username = os.getenv(
         "TECHADMIN_LOCAL_LOGIN_USERNAME",
         "TechAdminTestUser",
+    ).strip()
+    expected_password = os.getenv(
+        "TECHADMIN_LOCAL_LOGIN_PASSWORD",
+        "",
     )
-    expected_password = os.getenv("TECHADMIN_LOCAL_LOGIN_PASSWORD", "")
-
+ 
     valid_username = hmac.compare_digest(
         username.strip().casefold(),
-        expected_username.strip().casefold(),
+        expected_username.casefold(),
     )
-    valid_password = bool(expected_password) and hmac.compare_digest(
-        password,
-        expected_password,
+    valid_password = (
+        bool(expected_password)
+        and hmac.compare_digest(password, expected_password)
     )
-
+ 
     if not (valid_username and valid_password):
         st.error("Invalid username or password.")
         return
-
+ 
     st.session_state.local_authenticated_user = {
         "name": expected_username,
         "preferred_username": expected_username,
         "auth_source": "local_test_account",
     }
+    st.session_state.pop("app_user_access", None)
     st.rerun()
-
-
+ 
+ 
 def render_authenticated_user(claims: dict[str, Any]) -> None:
-    """Render identity and provide a logout action for either auth method."""
-
+    """Render authenticated identity and the appropriate logout action."""
+ 
     with st.sidebar:
         st.markdown(
             """
@@ -493,30 +482,55 @@ def render_authenticated_user(claims: dict[str, Any]) -> None:
             """,
             unsafe_allow_html=True,
         )
+ 
         display_name = (
             claims.get("name")
             or claims.get("preferred_username")
+            or claims.get("email")
             or "Authenticated user"
         )
         st.caption(f"Signed in as {display_name}")
+ 
         if claims.get("auth_source") == "local_test_account":
-            if st.button("Sign out", key="local_sign_out", width="stretch"):
-                st.session_state.pop("local_authenticated_user", None)
+            if st.button(
+                "Sign out",
+                key="local_sign_out",
+                width="stretch",
+            ):
+                clear_local_authentication_state()
                 st.rerun()
-        elif st.button("Sign out", key="sign_out", width="stretch"):
+        elif st.button(
+            "Sign out",
+            key="microsoft_sign_out",
+            width="stretch",
+        ):
+            clear_local_authentication_state()
             st.logout()
-
-
+ 
+ 
+# ---------------------------------------------------------------------------
+# Constants and session state
+# ---------------------------------------------------------------------------
+ 
 EXAMPLES = [
     "Get user details for MigrationTest2@Coforge.com",
     "Get user details for MigrationTest2@Coforge.com via script",
     "Get user details for MigrationTest2@Coforge.com via API",
     "Reset password for MigrationTest2@Coforge.com",
     "Reset password for MigrationTest2@Coforge.com via script",
+    "Unlock account for MigrationTest2@Coforge.com",
     "Add user MigrationTest2@Coforge.com to group TechAI_Group",
     "Remove user MigrationTest2@Coforge.com from group TechAI_Group",
+    (
+        "Investigate failed logins for "
+        "MigrationTest2@Coforge.com in the last 24 hours"
+    ),
+    (
+        "Investigate account lockout for "
+        "MigrationTest3@Coforge.com in the last 7 days"
+    ),
 ]
-
+ 
 YES_WORDS = {
     "yes",
     "y",
@@ -528,7 +542,7 @@ YES_WORDS = {
     "ok",
     "okay",
 }
-
+ 
 NO_WORDS = {
     "no",
     "n",
@@ -537,7 +551,7 @@ NO_WORDS = {
     "abort",
     "nevermind",
 }
-
+ 
 SENSITIVE_HISTORY_KEYS = {
     "new_password",
     "temporary_password",
@@ -549,66 +563,62 @@ SENSITIVE_HISTORY_KEYS = {
     "access_token",
     "refresh_token",
     "_dashboard_secret",
+    "_transient_password",
 }
-
-
-# ---------------------------------------------------------------------------
-# Service and session state
-# ---------------------------------------------------------------------------
-
-
+ 
+ 
 @st.cache_resource(show_spinner="Starting TechAdmin...")
 def get_service() -> FlowService:
-    """Create and cache the workflow service."""
-
+    """Create and cache the LangGraph-backed workflow service."""
+ 
     return FlowService()
-
-
+ 
+ 
 def init_state() -> None:
-    """Initialize the Streamlit session keys used by the application."""
-
+    """Initialize Streamlit session state."""
+ 
     st.session_state.setdefault("conversation", [])
     st.session_state.setdefault("queued_query", None)
     st.session_state.setdefault("pending_confirmation", None)
     st.session_state.setdefault("password_cards", [])
     st.session_state.setdefault("ollama_check_result", None)
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
-# Generic data and table helpers
+# Generic formatting and redaction helpers
 # ---------------------------------------------------------------------------
-
-
+ 
+ 
 def display_text(value: Any) -> str:
-    """Convert a value into readable table text."""
-
+    """Convert one value into readable table text."""
+ 
     if value is None or value == "":
         return "—"
-
+ 
     if isinstance(value, bool):
         return "Yes" if value else "No"
-
+ 
     return str(value)
-
-
+ 
+ 
 def show_table(
     rows: Iterable[tuple[str, Any]],
     caption: str = "",
 ) -> None:
     """Render a two-column Field/Value table."""
-
+ 
     prepared_rows = [
         (label, value)
         for label, value in rows
         if value not in (None, "")
     ]
-
+ 
     if not prepared_rows:
         return
-
+ 
     if caption:
         st.markdown(f"**{caption}**")
-
+ 
     frame = pd.DataFrame(
         [
             {
@@ -618,162 +628,92 @@ def show_table(
             for label, value in prepared_rows
         ]
     )
-
+ 
     st.dataframe(
         frame,
         hide_index=True,
         width="stretch",
     )
-
-
+ 
+ 
 def flatten_rows(
     data: Dict[str, Any],
     excluded: set[str] | None = None,
 ) -> list[tuple[str, Any]]:
-    """Convert a dictionary into readable rows without dropping nested data."""
-
+    """Convert a dictionary into readable rows."""
+ 
     excluded_keys = excluded or set()
     rows: list[tuple[str, Any]] = []
-
+ 
     for key, value in data.items():
         if key in excluded_keys or value in (None, ""):
             continue
-
+ 
         if isinstance(value, (dict, list)):
             value = json.dumps(
                 value,
                 ensure_ascii=False,
                 default=str,
             )
-
+ 
         rows.append(
             (
                 key.replace("_", " ").capitalize(),
                 value,
             )
         )
-
+ 
     return rows
-
-
+ 
+ 
 def redact_sensitive_history(value: Any) -> Any:
-    """Remove plaintext credentials from conversation history and downloads."""
-
+    """Remove plaintext credentials from history, JSON, and downloads."""
+ 
     if isinstance(value, dict):
         cleaned: dict[str, Any] = {}
-
+ 
         for key, item in value.items():
             normalized_key = key.strip().casefold()
-
+ 
             if normalized_key in SENSITIVE_HISTORY_KEYS:
                 if normalized_key != "_dashboard_secret":
                     cleaned[key] = "[redacted]"
                 continue
-
+ 
             cleaned[key] = redact_sensitive_history(item)
-
+ 
         return cleaned
-
+ 
     if isinstance(value, list):
-        return [redact_sensitive_history(item) for item in value]
-
+        return [
+            redact_sensitive_history(item)
+            for item in value
+        ]
+ 
     return value
-
-
-# ---------------------------------------------------------------------------
-# Temporary-password dashboard
-# ---------------------------------------------------------------------------
-
-
+ 
+ 
 def register_dashboard_secret(response: Dict[str, Any]) -> bool:
-    """
-    Move `_dashboard_secret` from the response into current session state.
-
-    FlowService must create `_dashboard_secret` before returning the response.
-    This function removes that field before the response is added to normal
-    conversation history or shown as raw JSON.
-    """
-
-    secret = response.pop("_dashboard_secret", None)
-
-    if not isinstance(secret, dict):
-        return False
-
-    password = secret.get("password")
-
-    if (
-        not isinstance(password, str)
-        or not password
-        or password.casefold() == "[redacted]"
-    ):
-        return False
-
-    password_card = {
-        "password": password,
-        "user": secret.get("user") or "Unknown user",
-        "backend": secret.get("backend") or "unknown",
-        "operation_id": secret.get("operation_id"),
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-    st.session_state.password_cards.insert(0, password_card)
-    return True
-
-
+    """Discard any legacy plaintext dashboard secret before storage."""
+ 
+    response.pop("_dashboard_secret", None)
+    return False
+ 
+ 
 def render_password_cards() -> None:
-    """Display generated temporary passwords during the current UI session."""
-
-    cards = st.session_state.password_cards
-
-    if not cards:
-        return
-
-    st.markdown("### Generated temporary passwords")
-
-    for index, card in enumerate(list(cards)):
-        with st.container(border=True):
-            show_table(
-                [
-                    ("Account", card.get("user")),
-                    ("Backend", card.get("backend")),
-                    ("Generated", card.get("created_at")),
-                    ("Operation ID", card.get("operation_id")),
-                ]
-            )
-
-            st.markdown("**Temporary password**")
-            st.code(
-                card.get("password") or "",
-                language=None,
-            )
-
-            if st.button(
-                "Remove password",
-                key=f"remove_password_{index}",
-                width="content",
-            ):
-                st.session_state.password_cards.pop(index)
-                st.rerun()
-
-    if st.button(
-        "Clear displayed passwords",
-        type="secondary",
-        width="content",
-    ):
-        st.session_state.password_cards = []
-        st.rerun()
-
-    st.divider()
-
-
+    """Legacy compatibility function. Plaintext password cards stay disabled."""
+ 
+    return
+ 
+ 
 # ---------------------------------------------------------------------------
-# Workflow result rendering
+# Workflow result renderers
 # ---------------------------------------------------------------------------
-
-
+ 
+ 
 def render_script_execution(execution: Dict[str, Any]) -> None:
     """Render PowerShell execution evidence."""
-
+ 
     show_table(
         [
             ("Success", execution.get("success")),
@@ -788,125 +728,76 @@ def render_script_execution(execution: Dict[str, Any]) -> None:
         ],
         "Script execution",
     )
-
-
+ 
+ 
 def render_guardrails(response: Dict[str, Any]) -> None:
-    """Render guardrail decisions and violations as tables."""
-
+    """Render guardrail decisions and violations."""
+ 
     show_table(
         [
             ("Action", response.get("guardrail_action")),
             ("Blocked", response.get("guardrail_blocked")),
-            ("Confirmation required", response.get("confirmation_required")),
-            ("Confirmation prompt", response.get("confirmation_prompt")),
-            ("Output filtered fields", response.get("guardrails_output_filtered")),
+            (
+                "Confirmation required",
+                response.get("confirmation_required"),
+            ),
+            (
+                "Confirmation prompt",
+                response.get("confirmation_prompt"),
+            ),
+            (
+                "Output filtered fields",
+                response.get("guardrails_output_filtered"),
+            ),
         ],
         "Guardrails",
     )
-
+ 
     violations = response.get("guardrail_violations")
-
-    if not isinstance(violations, list):
-        return
-
-    for index, violation in enumerate(violations, start=1):
-        if isinstance(violation, dict):
-            show_table(
-                flatten_rows(violation),
-                f"Guardrail violation {index}",
-            )
-
-
-# --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
-def render_password_reset_actions(result: Dict[str, Any]) -> None:
-    """
-    Show the outcome of a password reset.
-
-    Displays the masked password, the manager, and the two operator actions.
-    The original password is not present in `result` at all: the tool returns a
-    masked form plus an opaque token, and the token is what the buttons use.
-
-    Args:
-        result: The tool result payload from the reset.
-    """
-    st.success("Password Reset Successful")
-
-    manager_name = result.get("manager_name") or "Not Available"
-    manager_email = result.get("manager_email") or "Not Available"
-
-    show_table(
-        [
-            ("Username", result.get("user_name") or result.get("user_principal_name")),
-            ("Employee name", result.get("employee_name")),
-            ("Temporary password", result.get("masked_password") or "Not Available"),
-            ("Manager", manager_name),
-            ("Manager email", manager_email),
-            ("Backend", result.get("backend")),
-        ],
-        "Result",
-    )
-
-    execution = result.get("execution")
-    if isinstance(execution, dict):
-        render_script_execution(execution)
-
-    if manager_name == "Not Available":
-        st.info(
-            "No manager is assigned to this account, so the email option is "
-            "unavailable. The password file can still be downloaded."
-        )
-
-    token = result.get("password_token")
-
-    if not token:
-        st.warning(
-            "The password is no longer retrievable for this reset, so the "
-            "download and email actions are unavailable."
-        )
-        return
-
-    render_password_actions(token, manager_email)
-
-
-def render_password_actions(token: str, manager_email: str) -> None:
-    """
-    Draw the Send Email and Download buttons for a completed reset.
-
-    Both actions are explicit. Nothing is emailed as a side effect of the reset
-    itself; the mail goes out only when the operator presses the button.
-
-    Args:
-        token: The password token from the reset result.
-        manager_email: Recipient, or "Not Available".
-    """
-    # Keyed by token so two resets in one session keep separate buttons and
-    # separate status lines.
+ 
+    if isinstance(violations, list):
+        for index, violation in enumerate(violations, start=1):
+            if isinstance(violation, dict):
+                show_table(
+                    flatten_rows(violation),
+                    f"Guardrail violation {index}",
+                )
+ 
+ 
+def render_password_actions(
+    token: str,
+    manager_email: str,
+) -> None:
+    """Render explicit manager-email and secure TXT-download actions."""
+ 
     status_key = f"email_status_{token}"
     st.session_state.setdefault(status_key, None)
-
-    can_email = bool(manager_email) and manager_email != "Not Available"
-
+ 
+    can_email = (
+        bool(manager_email)
+        and manager_email != "Not Available"
+        and email_is_configured()
+    )
+ 
     left, right = st.columns(2)
-
+ 
     if left.button(
         "Send Email To Manager",
         key=f"send_{token}",
         disabled=not can_email,
+        width="stretch",
     ):
         with st.spinner("Sending email..."):
             sent, message, recipient = send_password_to_manager(token)
+ 
         st.session_state[status_key] = {
             "sent": sent,
             "message": message,
             "recipient": recipient,
         }
-
-    # CHANGED (Amit Bhagat): one button, as the specification shows. An earlier
-    # version needed Prepare and then Download, which meant two clicks and a
-    # dead-looking first press. st.download_button needs its data up front, so
-    # the file is built while rendering.
+ 
     ok, filename, content, message = build_password_download(token)
-
+ 
     if ok:
         right.download_button(
             "Download Password TXT",
@@ -914,89 +805,214 @@ def render_password_actions(token: str, manager_email: str) -> None:
             file_name=filename,
             mime="text/plain",
             key=f"dl_{token}",
+            width="stretch",
         )
     else:
-        # Generation failures are reported without disturbing the reset, which
-        # has already succeeded.
         right.button(
             "Download Password TXT",
             key=f"dl_disabled_{token}",
             disabled=True,
+            width="stretch",
         )
         st.caption(message)
-
+ 
     status = st.session_state.get(status_key)
-
+ 
     if status is None:
         st.caption("Email status: Not Sent")
     elif status["sent"]:
-        st.success(f"Email status: Sent Successfully to {status['recipient']}")
+        st.success(
+            "Email status: Sent Successfully to "
+            f"{status['recipient']}"
+        )
     else:
-        # A failed send is reported but does not undo the reset, which has
-        # already succeeded. The TXT download stays available.
-        st.error(f"Email status: Failed. {status['message']}")
-# --- END ADDED FOR PASSWORD ENHANCEMENTS ---
-
-
+        st.error(
+            f"Email status: Failed. {status['message']}"
+        )
+ 
+ 
+def render_password_reset_actions(result: Dict[str, Any]) -> None:
+    """Render a successful secure password-reset result."""
+ 
+    st.success("Password Reset Successful")
+ 
+    manager_name = result.get("manager_name") or "Not Available"
+    manager_email = result.get("manager_email") or "Not Available"
+ 
+    show_table(
+        [
+            (
+                "Username",
+                result.get("user_name")
+                or result.get("user_principal_name"),
+            ),
+            ("Employee name", result.get("employee_name")),
+            (
+                "Temporary password",
+                result.get("masked_password") or "Not Available",
+            ),
+            ("Manager", manager_name),
+            ("Manager email", manager_email),
+            ("Backend", result.get("backend")),
+        ],
+        "Result",
+    )
+ 
+    execution = result.get("execution")
+ 
+    if isinstance(execution, dict):
+        render_script_execution(execution)
+ 
+    if manager_name == "Not Available":
+        st.info(
+            "No manager is assigned. The password file can still be "
+            "downloaded."
+        )
+ 
+    token = result.get("password_token")
+ 
+    if not token:
+        st.warning(
+            "The password is no longer retrievable for this reset. "
+            "Run the reset again."
+        )
+        return
+ 
+    render_password_actions(token, manager_email)
+ 
+ 
 def render_result(intent: str, result: Dict[str, Any]) -> None:
-    """Render API or script operation results."""
-
+    """Render generic, password-reset, or investigation tool results."""
+ 
+    if intent == "failed_login_investigation":
+        report = result.get("report")
+ 
+        if isinstance(report, dict):
+            render_investigation_report(report)
+            return
+ 
+        st.warning(
+            "The investigation completed without a structured report payload."
+        )
+        show_table(
+            [
+                ("Source", result.get("source")),
+                (
+                    "Allowed event IDs",
+                    result.get("allowed_event_ids"),
+                ),
+                ("Message", result.get("message")),
+            ],
+            "Investigation result",
+        )
+        return
+ 
+    if (
+        intent == "password_reset"
+        and result.get("password_token")
+    ):
+        render_password_reset_actions(result)
+        return
+ 
     execution = result.get("execution")
     user_record = result.get("user")
-
+ 
     excluded = {
         "execution",
         "user",
         "new_password",
         "temporary_password",
+        "_transient_password",
+        "report",
+        "report_markdown",
     }
-
+ 
     if isinstance(user_record, dict):
-        result_rows = [("Backend", result.get("backend"))]
-        result_rows.extend(flatten_rows(user_record))
+        rows = [("Backend", result.get("backend"))]
+        rows.extend(flatten_rows(user_record))
     else:
-        result_rows = flatten_rows(result, excluded)
-
-    show_table(result_rows, "Result")
-
+        rows = flatten_rows(result, excluded)
+ 
+    show_table(rows, "Result")
+ 
     if isinstance(execution, dict):
         render_script_execution(execution)
-
-    # --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
-    if intent == "password_reset" and result.get("password_token"):
-        render_password_reset_actions(result)
-        return
-    # --- END ADDED FOR PASSWORD ENHANCEMENTS ---
-
-    if intent == "password_reset":
-        redacted_value = (
-            result.get("new_password")
-            or result.get("temporary_password")
+ 
+ 
+def render_operation_summary(response: Dict[str, Any]) -> None:
+    """Render a visual summary of the current workflow operation."""
+ 
+    intent = str(response.get("intent") or "Identity operation")
+    metadata = (
+        response.get("metadata")
+        if isinstance(response.get("metadata"), dict)
+        else {}
+    )
+    target = (
+        metadata.get("email")
+        or metadata.get("username")
+        or metadata.get("user_id")
+        or "Unknown target"
+    )
+ 
+    if response.get("confirmation_required"):
+        status = "Confirmation required"
+        status_class = "warning"
+    elif response.get("success") is True:
+        status = "Completed"
+        status_class = "success"
+    elif response.get("success") is False:
+        status = "Failed"
+        status_class = "failure"
+    else:
+        status = "Submitted"
+        status_class = ""
+ 
+    st.markdown(
+        f"""
+        <div class="operation-card {status_class}">
+            <div class="operation-label">Current operation</div>
+            <div class="operation-title">
+                {html.escape(intent.replace('_', ' ').title())}
+            </div>
+            <div class="operation-meta">
+                <strong>Target:</strong> {html.escape(str(target))}
+                &nbsp; | &nbsp;
+                <strong>Status:</strong> {html.escape(status)}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+ 
+    timeline = [
+        ("Request received", True),
+        ("Request analyzed", True),
+        ("Target validated", not bool(response.get("error"))),
+    ]
+ 
+    if response.get("confirmation_required"):
+        timeline.append(("Confirmation required", True))
+    else:
+        timeline.append(
+            ("Operation completed", response.get("success") is True)
         )
-
-        if redacted_value == "[redacted]":
-            show_table(
-                [
-                    (
-                        "Password display",
-                        (
-                            "The normal response is redacted. The generated "
-                            "password appears in the dashboard panel only when "
-                            "FlowService receives the original value before "
-                            "output sanitization."
-                        ),
-                    )
-                ],
-                "Password status",
-            )
-
-
+ 
+    st.markdown("**Operation timeline**")
+    st.caption(
+        "  ·  ".join(
+            f"{'✓' if complete else '○'} {label}"
+            for label, complete in timeline
+        )
+    )
+ 
+ 
 def render_response(response: Dict[str, Any]) -> None:
-    """Render workflow data without success/error notification boxes."""
-
+    """Render one complete LangGraph workflow response."""
+ 
     render_operation_summary(response)
     confidence = response.get("confidence")
-
+ 
     show_table(
         [
             ("Succeeded", response.get("success")),
@@ -1017,17 +1033,17 @@ def render_response(response: Dict[str, Any]) -> None:
         ],
         "Summary",
     )
-
+ 
     metadata = response.get("metadata")
-
+ 
     if isinstance(metadata, dict):
         show_table(
-            flatten_rows(metadata),
+            flatten_rows(metadata, SENSITIVE_HISTORY_KEYS),
             "Extracted metadata",
         )
-
+ 
     render_guardrails(response)
-
+ 
     show_table(
         [
             ("Agent", response.get("selected_agent")),
@@ -1037,17 +1053,25 @@ def render_response(response: Dict[str, Any]) -> None:
         ],
         "Routing",
     )
-
+ 
+    orchestration = response.get("orchestration")
+ 
+    if isinstance(orchestration, dict):
+        show_table(
+            flatten_rows(orchestration),
+            "Orchestration",
+        )
+ 
     execution_context = response.get("execution_context")
-
+ 
     if isinstance(execution_context, dict):
         show_table(
             flatten_rows(execution_context),
             "Execution context",
         )
-
+ 
     tool_result = response.get("tool_result")
-
+ 
     if isinstance(tool_result, dict) and tool_result:
         show_table(
             [
@@ -1057,96 +1081,47 @@ def render_response(response: Dict[str, Any]) -> None:
                 ("Succeeded", tool_result.get("success")),
                 ("Message", tool_result.get("message")),
                 ("Error", tool_result.get("error")),
-                ("API integration pending", tool_result.get("api_integration_pending")),
+                (
+                    "API integration pending",
+                    tool_result.get("api_integration_pending"),
+                ),
             ],
             "Tool execution",
         )
-
+ 
         result = tool_result.get("result")
-
+ 
         if isinstance(result, dict):
             render_result(
                 response.get("intent") or "",
                 result,
             )
-
-    with st.expander("Raw response (JSON)"):
-        st.json(response)
-
-
-def render_operation_summary(response: Dict[str, Any]) -> None:
-    """Show the key operation state before detailed result tables."""
-
-    intent = str(response.get("intent") or "Identity operation")
-    title = intent.replace("_", " ").title()
-    metadata = response.get("metadata")
-    target = "Unknown target"
-
-    if isinstance(metadata, dict):
-        target = (
-            metadata.get("email")
-            or metadata.get("username")
-            or metadata.get("user_id")
-            or target
-        )
-
-    if response.get("confirmation_required"):
-        status = "Confirmation required"
-        status_class = "warning"
-    elif response.get("success") is True:
-        status = "Completed"
-        status_class = "success"
-    elif response.get("success") is False:
-        status = "Failed"
-        status_class = "failure"
-    else:
-        status = "Submitted"
-        status_class = ""
-
-    safe_title = html.escape(title)
-    safe_target = html.escape(str(target))
-    safe_status = html.escape(status)
-
-    st.markdown(
-        f"""
-        <div class="operation-card {status_class}">
-            <div class="operation-label">Current operation</div>
-            <div class="operation-title">{safe_title}</div>
-            <div class="operation-meta"><strong>Target:</strong> {safe_target} &nbsp; | &nbsp; <strong>Status:</strong> {safe_status}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+ 
+    expander_label = (
+        "Technical investigation details"
+        if response.get("intent") == "failed_login_investigation"
+        else "Raw response (JSON)"
     )
-
-    timeline = [
-        ("Request received", True),
-        ("Request analyzed", True),
-        ("Target validated", not bool(response.get("error"))),
-    ]
-
-    if response.get("confirmation_required"):
-        timeline.append(("Confirmation required", True))
-    else:
-        timeline.append(("Operation completed", response.get("success") is True))
-
-    st.markdown("**Operation timeline**")
-    st.caption("  ·  ".join(
-        f"{'✓' if complete else '○'} {label}"
-        for label, complete in timeline
-    ))
-
-
+ 
+    with st.expander(expander_label, expanded=False):
+        st.json(
+            redact_sensitive_history(
+                copy.deepcopy(response)
+            )
+        )
+ 
+ 
 # ---------------------------------------------------------------------------
-# Confirmation workflow
+# Confirmation and conversation workflow
 # ---------------------------------------------------------------------------
-
-
+ 
+ 
 def set_pending_confirmation(
     response: Dict[str, Any],
     query: str,
 ) -> None:
-    """Store a request while guardrails wait for operator confirmation."""
-
+    """Persist a request awaiting trusted operator confirmation."""
+ 
     if response.get("confirmation_required"):
         st.session_state.pending_confirmation = {
             "query": query,
@@ -1157,15 +1132,15 @@ def set_pending_confirmation(
         }
     else:
         st.session_state.pending_confirmation = None
-
-
+ 
+ 
 def append_conversation(
     role: str,
     content: Any,
     timestamp: str,
 ) -> None:
-    """Append a password-safe conversation item."""
-
+    """Append one redacted conversation turn."""
+ 
     st.session_state.conversation.append(
         {
             "role": role,
@@ -1175,8 +1150,8 @@ def append_conversation(
             "time": timestamp,
         }
     )
-
-
+ 
+ 
 def execute_and_render(
     query: str,
     *,
@@ -1185,8 +1160,8 @@ def execute_and_render(
     correlation_id: str | None = None,
     add_user_turn: bool = True,
 ) -> Dict[str, Any]:
-    """Execute one workflow request and save the password-safe result."""
-
+    """Execute one workflow request and save its redacted result."""
+ 
     timestamp = datetime.now().strftime("%H:%M:%S")
     app_user_access = st.session_state.get("app_user_access")
     requester_id = (
@@ -1198,13 +1173,13 @@ def execute_and_render(
     if add_user_turn:
         with st.chat_message("user"):
             st.write(query)
-
+ 
         append_conversation(
             "user",
             query,
             timestamp,
         )
-
+ 
     with st.chat_message("assistant"):
         with st.spinner("Checking and running the operation..."):
             response = get_service().run_query(
@@ -1214,26 +1189,25 @@ def execute_and_render(
                 correlation_id=correlation_id,
                 requester_id=requester_id,
             )
-
+ 
         register_dashboard_secret(response)
         render_response(response)
-
+ 
     append_conversation(
         "assistant",
         response,
         timestamp,
     )
-
     set_pending_confirmation(response, query)
     return response
-
-
+ 
+ 
 def cancel_pending_confirmation() -> None:
-    """Cancel the pending operation without running the tool."""
-
+    """Cancel a pending operation without invoking its tool."""
+ 
     pending = st.session_state.pending_confirmation
     st.session_state.pending_confirmation = None
-
+ 
     response = {
         "success": False,
         "cancelled": True,
@@ -1255,40 +1229,39 @@ def cancel_pending_confirmation() -> None:
         "message": "Operation cancelled. No changes were made.",
         "error": None,
     }
-
+ 
     append_conversation(
         "assistant",
         response,
         datetime.now().strftime("%H:%M:%S"),
     )
-
     st.rerun()
-
-
+ 
+ 
 def render_confirmation_controls() -> None:
-    """Render trusted confirmation controls for a pending operation."""
-
+    """Render approval controls for a pending sensitive operation."""
+ 
     pending = st.session_state.pending_confirmation
-
+ 
     if not isinstance(pending, dict):
         return
-
+ 
     with st.container(border=True):
         st.markdown("**Approval required**")
         st.write(
             pending.get("prompt")
             or "Confirm this operation before continuing."
         )
-
+ 
         confirm_column, cancel_column = st.columns(2)
-
+ 
         if confirm_column.button(
             "Confirm and proceed",
             type="primary",
             width="stretch",
         ):
             st.session_state.pending_confirmation = None
-
+ 
             execute_and_render(
                 pending["query"],
                 confirmed=True,
@@ -1296,24 +1269,23 @@ def render_confirmation_controls() -> None:
                 correlation_id=pending.get("correlation_id"),
                 add_user_turn=False,
             )
-
             st.rerun()
-
+ 
         if cancel_column.button(
             "Cancel",
             width="stretch",
         ):
             cancel_pending_confirmation()
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
-# Sidebar
+# Sidebar and application shell
 # ---------------------------------------------------------------------------
-
-
+ 
+ 
 def safe_conversation_download() -> str:
-    """Serialize password-safe conversation history."""
-
+    """Serialize a password-safe copy of conversation history."""
+ 
     return json.dumps(
         redact_sensitive_history(
             copy.deepcopy(st.session_state.conversation)
@@ -1322,11 +1294,11 @@ def safe_conversation_download() -> str:
         ensure_ascii=False,
         default=str,
     )
-
-
+ 
+ 
 def render_sidebar() -> None:
-    """Render environment, examples, and session controls."""
-
+    """Render status, examples, diagnostics, and session controls."""
+ 
     with st.sidebar:
         app_user_access = st.session_state.get("app_user_access")
         user_id = (
@@ -1355,17 +1327,63 @@ def render_sidebar() -> None:
             st.divider()
 
         st.header("System status")
-
         status = get_config_status()
+ 
         show_table(
             [
-                ("Microsoft Graph", "Configured" if status.get("graph_client_id") and status.get("graph_client_secret") and status.get("graph_tenant_id") else "Incomplete"),
-                ("PowerShell", "Enabled" if status.get("powershell_operations_enabled") else "Disabled"),
-                ("Destructive actions", "Enabled" if status.get("destructive_operations_enabled") else "Disabled"),
-                ("Configuration", "Valid" if status.get("config_valid") else "Invalid"),
+                (
+                    "Microsoft Graph",
+                    (
+                        "Configured"
+                        if status.get("graph_client_id")
+                        and status.get("graph_client_secret")
+                        and status.get("graph_tenant_id")
+                        else "Incomplete"
+                    ),
+                ),
+                (
+                    "PowerShell",
+                    (
+                        "Enabled"
+                        if status.get("powershell_operations_enabled")
+                        else "Disabled"
+                    ),
+                ),
+                (
+                    "Destructive actions",
+                    (
+                        "Enabled"
+                        if status.get("destructive_operations_enabled")
+                        else "Disabled"
+                    ),
+                ),
+                (
+                    "LangGraph",
+                    (
+                        "Active"
+                        if status.get("orchestration_engine") == "langgraph"
+                        else "Unavailable"
+                    ),
+                ),
+                (
+                    "Operation audit",
+                    (
+                        "Enabled"
+                        if status.get("operation_audit_enabled")
+                        else "Unknown"
+                    ),
+                ),
+                (
+                    "Configuration",
+                    (
+                        "Valid"
+                        if status.get("config_valid")
+                        else "Invalid"
+                    ),
+                ),
             ]
         )
-
+ 
         if st.button(
             "Test Ollama connection",
             width="stretch",
@@ -1375,42 +1393,51 @@ def render_sidebar() -> None:
                 "connected": connected,
                 "message": message,
             }
-
+ 
         ollama_result = st.session_state.ollama_check_result
-
+ 
         if isinstance(ollama_result, dict):
             show_table(
                 [
                     (
                         "Ollama",
-                        "Connected" if ollama_result.get("connected") else "Unavailable",
+                        (
+                            "Connected"
+                            if ollama_result.get("connected")
+                            else "Unavailable"
+                        ),
                     ),
+                    ("Details", ollama_result.get("message")),
                 ]
             )
-
+ 
         with st.expander("Environment details"):
             show_table(
                 flatten_rows(
                     status,
                     {
-                        "graph_client_id",
                         "graph_client_secret",
-                        "graph_tenant_id",
-                        "powershell_operations_enabled",
-                        "destructive_operations_enabled",
+                        "client_secret",
+                        "access_token",
                     },
                 )
             )
-
+ 
         st.divider()
         st.caption("Example queries")
-
-        for example in EXAMPLES:
-            st.caption(example)
-
+ 
+        for index, example in enumerate(EXAMPLES):
+            if st.button(
+                example,
+                key=f"example_{index}",
+                width="stretch",
+            ):
+                st.session_state.queued_query = example
+                st.rerun()
+ 
         st.divider()
         st.caption(f"Logs: {LOG_FILE}")
-
+ 
         if st.session_state.conversation:
             if st.button(
                 "Clear conversation",
@@ -1419,7 +1446,7 @@ def render_sidebar() -> None:
                 st.session_state.conversation = []
                 st.session_state.pending_confirmation = None
                 st.rerun()
-
+ 
             st.download_button(
                 "Download as JSON",
                 data=safe_conversation_download(),
@@ -1427,101 +1454,129 @@ def render_sidebar() -> None:
                 mime="application/json",
                 width="stretch",
             )
-
-
+ 
+ 
 def render_recent_operations() -> None:
-    """Show completed session operations without exposing sensitive values."""
-
-    operations = []
+    """Show the five most recent session operations."""
+ 
+    operations: list[dict[str, Any]] = []
+ 
     for turn in reversed(st.session_state.conversation):
-        if turn.get("role") != "assistant" or not isinstance(turn.get("content"), dict):
+        if (
+            turn.get("role") != "assistant"
+            or not isinstance(turn.get("content"), dict)
+        ):
             continue
-
+ 
         response = turn["content"]
-        metadata = response.get("metadata")
-        target = "Unknown target"
-        if isinstance(metadata, dict):
-            target = metadata.get("email") or metadata.get("username") or target
-
+        metadata = (
+            response.get("metadata")
+            if isinstance(response.get("metadata"), dict)
+            else {}
+        )
+ 
+        if response.get("confirmation_required"):
+            operation_status = "Awaiting confirmation"
+        elif response.get("cancelled"):
+            operation_status = "Cancelled"
+        elif response.get("success") is True:
+            operation_status = "Completed"
+        else:
+            operation_status = "Failed"
+ 
         operations.append(
             {
-                "Operation": str(response.get("intent") or "Identity operation").replace("_", " ").title(),
-                "Target": target,
-                "Status": "Completed" if response.get("success") else "Failed",
+                "Operation": str(
+                    response.get("intent")
+                    or "Identity operation"
+                ).replace("_", " ").title(),
+                "Target": (
+                    metadata.get("email")
+                    or metadata.get("username")
+                    or "Unknown target"
+                ),
+                "Status": operation_status,
                 "Time": turn.get("time", ""),
             }
         )
-
+ 
         if len(operations) == 5:
             break
-
+ 
     if operations:
         st.markdown("#### Recent operations")
-        st.dataframe(pd.DataFrame(operations), hide_index=True, width="stretch")
-
-
+        st.dataframe(
+            pd.DataFrame(operations),
+            hide_index=True,
+            width="stretch",
+        )
+ 
+ 
 def render_command_center() -> None:
-    """Render guidance before the conversation has any messages."""
-
+    """Render the initial guidance panel before conversation begins."""
+ 
     if st.session_state.conversation:
         return
-
+ 
     st.markdown(
         """
         <div class="tech-panel">
             <strong>What do you need to take care of?</strong>
-            <span>Ask for a user lookup, password reset, account unlock, or access change. Sensitive actions pause for confirmation.</span>
+            <span>
+                Ask for a user lookup, password reset, account unlock,
+                access change, or failed-login/account-lockout investigation.
+                Sensitive actions pause for confirmation.
+            </span>
         </div>
         """,
         unsafe_allow_html=True,
     )
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Main application
 # ---------------------------------------------------------------------------
-
-
+ 
+ 
 def main() -> None:
     """Run the TechAdmin Streamlit application."""
-
-    require_authentication()
+ 
     init_state()
-
+    require_authentication()
     render_command_center()
-
-    # CHANGED FOR PASSWORD ENHANCEMENTS (Amit Bhagat): the plaintext password
-    # dashboard is gone. The specification forbids the original password on the
-    # UI; the reset result now shows a masked form with Download and Send Email
-    # actions instead.
+ 
+    # Plaintext password cards remain intentionally disabled. Password reset
+    # results expose only a masked value plus secure delivery actions.
     # render_password_cards()
-
+ 
     for turn in st.session_state.conversation:
         with st.chat_message(turn["role"]):
             if turn["role"] == "user":
                 st.write(turn["content"])
             elif isinstance(turn["content"], dict):
                 render_response(turn["content"])
-
+ 
     query = (
         st.session_state.queued_query
         or st.chat_input("Type an identity operation...")
     )
-
     st.session_state.queued_query = None
-
+ 
     if query:
         pending = st.session_state.pending_confirmation
         normalized_answer = query.strip().casefold().rstrip(".!")
-
-        if isinstance(pending, dict) and normalized_answer in YES_WORDS:
+ 
+        if (
+            isinstance(pending, dict)
+            and normalized_answer in YES_WORDS
+        ):
             append_conversation(
                 "user",
                 query,
                 datetime.now().strftime("%H:%M:%S"),
             )
-
             st.session_state.pending_confirmation = None
-
+ 
             execute_and_render(
                 pending["query"],
                 confirmed=True,
@@ -1529,24 +1584,28 @@ def main() -> None:
                 correlation_id=pending.get("correlation_id"),
                 add_user_turn=False,
             )
-
-        elif isinstance(pending, dict) and normalized_answer in NO_WORDS:
+ 
+        elif (
+            isinstance(pending, dict)
+            and normalized_answer in NO_WORDS
+        ):
             append_conversation(
                 "user",
                 query,
                 datetime.now().strftime("%H:%M:%S"),
             )
             cancel_pending_confirmation()
-
+ 
         else:
             execute_and_render(query)
-
+ 
         st.rerun()
-
+ 
     render_confirmation_controls()
     render_recent_operations()
     render_sidebar()
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
+ 
