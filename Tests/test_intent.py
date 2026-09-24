@@ -12,7 +12,9 @@ TODO: Implement tests
 
 import pytest
 
+from App.guardrails.input_guardrails import check_single_user
 from App.intent.unified_extractor import UnifiedIntentMetadataExtractor
+from App.workflow.state import IntentType
 
 
 def test_intent_classification_password_reset():
@@ -48,3 +50,49 @@ def test_explicit_email_overrides_model_metadata():
 
     assert result["metadata"]["email"] == "amit.bhagat@coforge.com"
     assert result["metadata"]["username"] == "amit.bhagat"
+
+
+@pytest.mark.parametrize(
+    ("user_input", "expected_intent"),
+    [
+        ("show information for xyz@coforge.com", IntentType.GET_USER_DETAILS),
+        ("retrieve profile for xyz@coforge.com", IntentType.GET_USER_DETAILS),
+        ("change password for xyz@coforge.com", IntentType.PASSWORD_RESET),
+        ("generate a new password for xyz@coforge.com", IntentType.PASSWORD_RESET),
+        ("help reset password for xyz@coforge.com", IntentType.PASSWORD_RESET),
+        ("password reset required for xyz@coforge.com", IntentType.PASSWORD_RESET),
+    ],
+)
+def test_natural_language_aliases_are_classified(user_input, expected_intent):
+    assert UnifiedIntentMetadataExtractor._detect_deterministic_intent(user_input) == expected_intent
+
+
+@pytest.mark.parametrize(
+    "user_input",
+    [
+        "show information for xyz@coforge.com",
+        "generate a new password for xyz@coforge.com",
+    ],
+)
+def test_natural_language_aliases_extract_one_target(user_input):
+    intent = UnifiedIntentMetadataExtractor._detect_deterministic_intent(user_input)
+    result = UnifiedIntentMetadataExtractor._prepare_result(
+        raw_result={
+            "intent": intent.value,
+            "confidence": 0.5,
+            "explanation": "Natural language request",
+            "metadata": {},
+        },
+        user_input=user_input,
+    )
+
+    assert result["metadata"]["email"] == "xyz@coforge.com"
+    assert result["metadata"]["username"] == "xyz"
+
+
+def test_single_user_guardrail_rejects_multiple_targets():
+    decision = check_single_user(
+        "retrieve profile for xyz@coforge.com and abc@coforge.com"
+    )
+
+    assert decision.blocked

@@ -149,6 +149,34 @@ OPERATION_CATALOG = {
         "risk_level": "HIGH",
         "requires_approval": True,
     },
+    "account_unlock": {
+        "operation_code": "UNLOCK_USER",
+        "operation_name": "Unlock User",
+        "tool_name": "UNLOCK_ACCOUNT",
+        "risk_level": "MEDIUM",
+        "requires_approval": False,
+    },
+    "failed_login_investigation": {
+        "operation_code": "FAILED_LOGIN_INVESTIGATION",
+        "operation_name": "Lockout / Failed Login Investigation",
+        "tool_name": "INVESTIGATE_FAILED_LOGIN",
+        "risk_level": "LOW",
+        "requires_approval": False,
+    },
+    "grant_access": {
+        "operation_code": "ADD_USER_TO_GROUP",
+        "operation_name": "Add User To Group",
+        "tool_name": "MANAGE_ACCESS",
+        "risk_level": "HIGH",
+        "requires_approval": False,
+    },
+    "revoke_access": {
+        "operation_code": "REMOVE_USER_FROM_GROUP",
+        "operation_name": "Remove User From Group",
+        "tool_name": "MANAGE_ACCESS",
+        "risk_level": "HIGH",
+        "requires_approval": True,
+    },
 }
 
 # Backend name from the tool result, mapped to the execution_type the design

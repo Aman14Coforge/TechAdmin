@@ -7,6 +7,10 @@ TechAdmin workflow can use.
 Current operations:
 1. GET_USER_DETAILS
 2. RESET_PASSWORD
+3. UNLOCK_USER
+4. FAILED_LOGIN_INVESTIGATION
+5. ADD_USER_TO_GROUP
+6. REMOVE_USER_FROM_GROUP
 
 System-generated fields:
 - operation_id
@@ -49,6 +53,46 @@ APPROVED_OPERATIONS: list[dict[str, Any]] = [
         "execution_type": "API",
         "tool_name": "RESET_PASSWORD",
         "script_name": None,
+        "risk_level": "HIGH",
+        "requires_approval": True,
+        "is_active": True,
+    },
+    {
+        "operation_code": "UNLOCK_USER",
+        "operation_name": "Unlock User",
+        "execution_type": "SCRIPT",
+        "tool_name": "UNLOCK_ACCOUNT",
+        "script_name": "Invoke-UnlockUser.ps1",
+        "risk_level": "MEDIUM",
+        "requires_approval": False,
+        "is_active": True,
+    },
+    {
+        "operation_code": "FAILED_LOGIN_INVESTIGATION",
+        "operation_name": "Lockout / Failed Login Investigation",
+        "execution_type": "API",
+        "tool_name": "INVESTIGATE_FAILED_LOGIN",
+        "script_name": None,
+        "risk_level": "LOW",
+        "requires_approval": False,
+        "is_active": True,
+    },
+    {
+        "operation_code": "ADD_USER_TO_GROUP",
+        "operation_name": "Add User To Group",
+        "execution_type": "SCRIPT",
+        "tool_name": "MANAGE_ACCESS",
+        "script_name": "Invoke-AddUserToGroup.ps1",
+        "risk_level": "HIGH",
+        "requires_approval": False,
+        "is_active": True,
+    },
+    {
+        "operation_code": "REMOVE_USER_FROM_GROUP",
+        "operation_name": "Remove User From Group",
+        "execution_type": "SCRIPT",
+        "tool_name": "MANAGE_ACCESS",
+        "script_name": "Invoke-RemoveUserFromGroup.ps1",
         "risk_level": "HIGH",
         "requires_approval": True,
         "is_active": True,

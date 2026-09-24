@@ -51,7 +51,6 @@ load_dotenv(
 
 from loguru import logger  # noqa: E402
 
-from App.db.operation_audit import close_request, open_request  # noqa: E402
 from App.services.email_service import EmailConfig, send_password_email  # noqa: E402
 from App.services.password_file import generate_password_file  # noqa: E402
 from App.services.password_vault import password_vault  # noqa: E402
@@ -221,17 +220,6 @@ class FlowService:
             execution_identity,
         )
 
-        # Open only for the first submission. The trusted confirmation retry
-        # reuses the same request ID and updates the already existing row.
-        if not confirmed:
-            open_request(
-                request_id=resolved_request_id,
-                user_query=normalized_query,
-                requested_by=resolved_requester_id,
-                source_channel="WEB",
-            )
-        # --- END ADDED FOR OPERATION AUDIT ---
-
         try:
             workflow_response = self.workflow.invoke(
                 user_input=normalized_query,
@@ -240,6 +228,7 @@ class FlowService:
                 confirmed=bool(confirmed),
                 requester_id=resolved_requester_id,
                 requester_role=self.requester_role,
+                source_channel="WEB",
             )
 
             if not isinstance(workflow_response, dict):
@@ -279,20 +268,6 @@ class FlowService:
                 dashboard_secret is not None,
             )
 
-            try:
-                # safe_response has already passed graph output sanitization.
-                close_request(
-                    resolved_request_id,
-                    safe_response,
-                )
-            except Exception as exc:
-                logger.exception(
-                    "OPERATION_AUDIT_CLOSE_FAILED | request_id={} | "
-                    "error_type={}",
-                    resolved_request_id,
-                    type(exc).__name__,
-                )
-
             return safe_response
 
         except Exception as exc:
@@ -303,19 +278,6 @@ class FlowService:
                 resolved_correlation_id,
                 type(exc).__name__,
             )
-
-            # --- ADDED FOR OPERATION AUDIT (Amit Bhagat) ---
-            # A crash is an outcome too. Without this the row would stay at
-            # RECEIVED and look like an abandoned request.
-            close_request(
-                resolved_request_id,
-                {
-                    "success": False,
-                    "user_input": normalized_query,
-                    "error": type(exc).__name__,
-                },
-            )
-            # --- END ADDED FOR OPERATION AUDIT ---
 
             return {
                 "success": False,

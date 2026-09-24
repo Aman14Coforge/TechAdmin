@@ -60,8 +60,13 @@ class UnifiedIntentMetadataExtractor:
         re.IGNORECASE,
     )
     EXPLICIT_DETAILS_USERNAME_PATTERN = re.compile(
-        r"\b(?:details?|information?)\s+(?:for\s+|of\s+)?"
+        r"\b(?:details?|information?|profile|account)\s+(?:for\s+|of\s+)?"
         r"([A-Z0-9][A-Z0-9._-]{1,})\b",
+        re.IGNORECASE,
+    )
+    EXPLICIT_TARGET_PATTERN = re.compile(
+        r"\b(?:for|of)\s+(?:the\s+)?(?:user\s+|account\s+)?"
+        r"([A-Z0-9][A-Z0-9._-]{1,}(?:@[A-Z0-9.-]+\.[A-Z]{2,})?)\b",
         re.IGNORECASE,
     )
 
@@ -124,15 +129,23 @@ class UnifiedIntentMetadataExtractor:
             r"\bget\s+(?:the\s+)?(?:ad\s+)?user\s+details?\b",
             r"\bget\s+details?\s+(?:for|of)\s+(?:the\s+)?(?:ad\s+)?user\b",
             r"\bshow\s+(?:the\s+)?(?:ad\s+)?user\s+(?:details?|information)\b",
+            r"\bshow\s+(?:the\s+)?(?:user\s+)?information\b",
             r"\bfind\s+(?:the\s+)?(?:ad\s+)?user\s+(?:details?|information)\b",
             r"\blook\s*up\s+(?:the\s+)?(?:ad\s+)?user\b",
             r"\bretrieve\s+(?:the\s+)?(?:ad\s+)?user\s+(?:details?|information)\b",
+            r"\bshow\s+(?:the\s+)?(?:user\s+)?(?:profile|account)\b",
+            r"\bretrieve\s+(?:the\s+)?(?:user\s+)?(?:profile|account)\b",
+            r"\blook\s*\s*up\s+(?:the\s+)?(?:user\s+)?(?:profile|account)\b",
+            r"\bwhat\s+(?:do\s+we\s+know|is\s+known)\s+about\b",
         ),
         IntentType.PASSWORD_RESET: (
             r"\breset\s+(?:the\s+)?(?:user\s+|account\s+)?password\b",
             r"\bchange\s+(?:the\s+)?(?:user\s+|account\s+)?password\b",
             r"\bpassword\s+reset\b",
             r"\brecover\s+(?:the\s+)?(?:user\s+|account\s+)?password\b",
+            r"\bgenerate\s+(?:a\s+)?(?:new\s+)?password\b",
+            r"\bissue\s+(?:a\s+)?(?:new\s+)?password\b",
+            r"\bpassword\s+reset\s+(?:is\s+)?required\b",
         ),
         IntentType.ACCOUNT_UNLOCK: (
             r"\bunlock\s+(?:the\s+)?(?:ad\s+)?(?:user\s+)?account\b",
@@ -660,13 +673,18 @@ class UnifiedIntentMetadataExtractor:
             )[0]
             normalized_metadata["username_source"] = "derived_from_email"
         elif (
-            selected_intent is IntentType.GET_USER_DETAILS
+            selected_intent in {
+                IntentType.GET_USER_DETAILS,
+                IntentType.PASSWORD_RESET,
+            }
             and not normalized_metadata.get("username")
             and not normalized_metadata.get("email")
         ):
             username_match = cls.EXPLICIT_DETAILS_USERNAME_PATTERN.search(
                 user_input
             )
+            if username_match is None:
+                username_match = cls.EXPLICIT_TARGET_PATTERN.search(user_input)
             if username_match:
                 normalized_metadata["username"] = username_match.group(1)
                 normalized_metadata["username_source"] = "explicit"
