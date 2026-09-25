@@ -10,6 +10,18 @@ password_reset, phrases such as "change the password", "generate a new
 password", "help reset the password", and "password reset required" mean a
 password reset.
 
+For failed_login_investigation, phrases such as "investigate failed logins",
+"check sign-in failures", "find out why the account is locked out", and
+"investigate the account lockout" mean an investigation, not an unlock. For
+account_unlock, phrases such as "unlock the account", "unlock the user", and
+"the user is locked out" mean unlock the account. For grant_access, phrases
+such as "add the user to the group", "put the user in the group", and
+"assign the user to the group" mean add membership. For revoke_access, phrases
+such as "remove the user from the group", "take the user out of the group",
+and "revoke the user's group access" mean remove membership. Extract
+group_name for grant_access and revoke_access, and extract time_window when an
+investigation period is stated.
+
 For password_reset and get_user_details, extract execution_backend using only explicit wording:
 - "via API", "using API", "through API", "Microsoft Graph" => "api"
 - "via script", "using script", "through PowerShell", "PowerShell script" => "script"

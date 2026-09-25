@@ -61,6 +61,13 @@ def test_explicit_email_overrides_model_metadata():
         ("generate a new password for xyz@coforge.com", IntentType.PASSWORD_RESET),
         ("help reset password for xyz@coforge.com", IntentType.PASSWORD_RESET),
         ("password reset required for xyz@coforge.com", IntentType.PASSWORD_RESET),
+        ("investigate failed sign-ins for alex.johnson", IntentType.FAILED_LOGIN_INVESTIGATION),
+        ("why is alex.johnson locked out", IntentType.FAILED_LOGIN_INVESTIGATION),
+        ("please unlock the account for alex.johnson", IntentType.ACCOUNT_UNLOCK),
+        ("put alex.johnson in the Finance-Readers group", IntentType.GRANT_ACCESS),
+        ("assign alex.johnson to the Finance-Readers group", IntentType.GRANT_ACCESS),
+        ("take alex.johnson out of the Finance-Readers group", IntentType.REVOKE_ACCESS),
+        ("remove alex.johnson from the Finance-Readers group", IntentType.REVOKE_ACCESS),
     ],
 )
 def test_natural_language_aliases_are_classified(user_input, expected_intent):
@@ -88,6 +95,44 @@ def test_natural_language_aliases_extract_one_target(user_input):
 
     assert result["metadata"]["email"] == "xyz@coforge.com"
     assert result["metadata"]["username"] == "xyz"
+
+
+@pytest.mark.parametrize(
+    ("user_input", "expected_intent"),
+    [
+        ("put alex.johnson in the Finance-Readers group", IntentType.GRANT_ACCESS),
+        ("assign alex.johnson to the Finance-Readers group", IntentType.GRANT_ACCESS),
+        ("take alex.johnson out of the Finance-Readers group", IntentType.REVOKE_ACCESS),
+        ("remove alex.johnson from the Finance-Readers group", IntentType.REVOKE_ACCESS),
+    ],
+)
+def test_membership_aliases_extract_user_and_group(user_input, expected_intent):
+    result = UnifiedIntentMetadataExtractor._prepare_result(
+        raw_result={
+            "intent": expected_intent.value,
+            "confidence": 0.5,
+            "explanation": "Natural language membership request",
+            "metadata": {},
+        },
+        user_input=user_input,
+    )
+
+    assert result["metadata"]["username"] == "alex.johnson"
+    assert result["metadata"]["group_name"] == "Finance-Readers"
+
+
+def test_lockout_question_extracts_investigation_target():
+    result = UnifiedIntentMetadataExtractor._prepare_result(
+        raw_result={
+            "intent": IntentType.FAILED_LOGIN_INVESTIGATION.value,
+            "confidence": 0.5,
+            "explanation": "Natural language lockout investigation",
+            "metadata": {},
+        },
+        user_input="why is alex.johnson locked out",
+    )
+
+    assert result["metadata"]["username"] == "alex.johnson"
 
 
 def test_single_user_guardrail_rejects_multiple_targets():
