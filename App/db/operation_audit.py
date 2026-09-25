@@ -637,14 +637,17 @@ def close_request(
                 )
                 session.add(row)
 
-            metadata = response.get("metadata") or {}
+            metadata = response.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
             target = metadata.get("email") or metadata.get("username") or ""
 
             # The backend that actually ran decides the execution type recorded
             # against a newly created catalog entry.
-            backend = str(
-                (response.get("tool_result") or {}).get("result", {}).get("backend", "")
-            ).lower()
+            tool_result = response.get("tool_result")
+            tool_result = tool_result if isinstance(tool_result, dict) else {}
+            result = tool_result.get("result")
+            result = result if isinstance(result, dict) else {}
+            backend = str(result.get("backend", "")).lower()
 
             row.operation_id = ensure_operation_id(
                 session,
@@ -661,12 +664,9 @@ def close_request(
 
             # The tool result carries the directory's own object ID, which is
             # stable even when a UPN is renamed.
-            tool_result = response.get("tool_result") or {}
-            result = tool_result.get("result") or {}
-            if isinstance(result, dict):
-                row.target_object_id = _optional_uuid(
-                    result.get("id") or result.get("user_id")
-                )
+            row.target_object_id = _optional_uuid(
+                result.get("id") or result.get("user_id")
+            )
 
             row.status = status_for(response)
             row.completed_at = datetime.now(timezone.utc)

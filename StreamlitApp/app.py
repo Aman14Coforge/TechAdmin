@@ -1326,90 +1326,90 @@ def render_sidebar() -> None:
 
             st.divider()
 
-        st.header("System status")
         status = get_config_status()
  
-        show_table(
-            [
-                (
-                    "Microsoft Graph",
-                    (
-                        "Configured"
-                        if status.get("graph_client_id")
-                        and status.get("graph_client_secret")
-                        and status.get("graph_tenant_id")
-                        else "Incomplete"
-                    ),
-                ),
-                (
-                    "PowerShell",
-                    (
-                        "Enabled"
-                        if status.get("powershell_operations_enabled")
-                        else "Disabled"
-                    ),
-                ),
-                (
-                    "Destructive actions",
-                    (
-                        "Enabled"
-                        if status.get("destructive_operations_enabled")
-                        else "Disabled"
-                    ),
-                ),
-                (
-                    "LangGraph",
-                    (
-                        "Active"
-                        if status.get("orchestration_engine") == "langgraph"
-                        else "Unavailable"
-                    ),
-                ),
-                (
-                    "Operation audit",
-                    (
-                        "Enabled"
-                        if status.get("operation_audit_enabled")
-                        else "Unknown"
-                    ),
-                ),
-                (
-                    "Configuration",
-                    (
-                        "Valid"
-                        if status.get("config_valid")
-                        else "Invalid"
-                    ),
-                ),
-            ]
-        )
- 
-        if st.button(
-            "Test Ollama connection",
-            width="stretch",
-        ):
-            connected, message = check_ollama()
-            st.session_state.ollama_check_result = {
-                "connected": connected,
-                "message": message,
-            }
- 
-        ollama_result = st.session_state.ollama_check_result
- 
-        if isinstance(ollama_result, dict):
+        with st.expander("System status"):
             show_table(
                 [
                     (
-                        "Ollama",
+                        "Microsoft Graph",
                         (
-                            "Connected"
-                            if ollama_result.get("connected")
+                            "Configured"
+                            if status.get("graph_client_id")
+                            and status.get("graph_client_secret")
+                            and status.get("graph_tenant_id")
+                            else "Incomplete"
+                        ),
+                    ),
+                    (
+                        "PowerShell",
+                        (
+                            "Enabled"
+                            if status.get("powershell_operations_enabled")
+                            else "Disabled"
+                        ),
+                    ),
+                    (
+                        "Destructive actions",
+                        (
+                            "Enabled"
+                            if status.get("destructive_operations_enabled")
+                            else "Disabled"
+                        ),
+                    ),
+                    (
+                        "LangGraph",
+                        (
+                            "Active"
+                            if status.get("orchestration_engine") == "langgraph"
                             else "Unavailable"
                         ),
                     ),
-                    ("Details", ollama_result.get("message")),
+                    (
+                        "Operation audit",
+                        (
+                            "Enabled"
+                            if status.get("operation_audit_enabled")
+                            else "Unknown"
+                        ),
+                    ),
+                    (
+                        "Configuration",
+                        (
+                            "Valid"
+                            if status.get("config_valid")
+                            else "Invalid"
+                        ),
+                    ),
                 ]
             )
+
+            if st.button(
+                "Test Ollama connection",
+                width="stretch",
+            ):
+                connected, message = check_ollama()
+                st.session_state.ollama_check_result = {
+                    "connected": connected,
+                    "message": message,
+                }
+
+            ollama_result = st.session_state.ollama_check_result
+
+            if isinstance(ollama_result, dict):
+                show_table(
+                    [
+                        (
+                            "Ollama",
+                            (
+                                "Connected"
+                                if ollama_result.get("connected")
+                                else "Unavailable"
+                            ),
+                        ),
+                        ("Details", ollama_result.get("message")),
+                    ]
+                )
  
         with st.expander("Environment details"):
             show_table(
