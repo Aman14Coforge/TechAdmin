@@ -60,8 +60,18 @@ class UnifiedIntentMetadataExtractor:
         re.IGNORECASE,
     )
     EXPLICIT_DETAILS_USERNAME_PATTERN = re.compile(
-        r"\b(?:details?|information?)\s+(?:for\s+|of\s+)?"
+        r"\b(?:details?|information?|profile|account)\s+(?:for\s+|of\s+)?"
         r"([A-Z0-9][A-Z0-9._-]{1,})\b",
+        re.IGNORECASE,
+    )
+    EXPLICIT_TARGET_PATTERN = re.compile(
+        r"\b(?:for|of)\s+(?:the\s+)?(?:user\s+|account\s+)?"
+        r"([A-Z0-9][A-Z0-9._-]{1,}(?:@[A-Z0-9.-]+\.[A-Z]{2,})?)\b",
+        re.IGNORECASE,
+    )
+    EXPLICIT_LOCKOUT_USERNAME_PATTERN = re.compile(
+        r"\bwhy\s+is\s+(?:the\s+)?(?:user\s+|account\s+)?"
+        r"([A-Z0-9][A-Z0-9._-]{1,})\s+locked\s+out\b",
         re.IGNORECASE,
     )
 
@@ -124,15 +134,23 @@ class UnifiedIntentMetadataExtractor:
             r"\bget\s+(?:the\s+)?(?:ad\s+)?user\s+details?\b",
             r"\bget\s+details?\s+(?:for|of)\s+(?:the\s+)?(?:ad\s+)?user\b",
             r"\bshow\s+(?:the\s+)?(?:ad\s+)?user\s+(?:details?|information)\b",
+            r"\bshow\s+(?:the\s+)?(?:user\s+)?information\b",
             r"\bfind\s+(?:the\s+)?(?:ad\s+)?user\s+(?:details?|information)\b",
             r"\blook\s*up\s+(?:the\s+)?(?:ad\s+)?user\b",
             r"\bretrieve\s+(?:the\s+)?(?:ad\s+)?user\s+(?:details?|information)\b",
+            r"\bshow\s+(?:the\s+)?(?:user\s+)?(?:profile|account)\b",
+            r"\bretrieve\s+(?:the\s+)?(?:user\s+)?(?:profile|account)\b",
+            r"\blook\s*\s*up\s+(?:the\s+)?(?:user\s+)?(?:profile|account)\b",
+            r"\bwhat\s+(?:do\s+we\s+know|is\s+known)\s+about\b",
         ),
         IntentType.PASSWORD_RESET: (
             r"\breset\s+(?:the\s+)?(?:user\s+|account\s+)?password\b",
             r"\bchange\s+(?:the\s+)?(?:user\s+|account\s+)?password\b",
             r"\bpassword\s+reset\b",
             r"\brecover\s+(?:the\s+)?(?:user\s+|account\s+)?password\b",
+            r"\bgenerate\s+(?:a\s+)?(?:new\s+)?password\b",
+            r"\bissue\s+(?:a\s+)?(?:new\s+)?password\b",
+            r"\bpassword\s+reset\s+(?:is\s+)?required\b",
         ),
         IntentType.ACCOUNT_UNLOCK: (
             r"\bunlock\s+(?:the\s+)?(?:ad\s+)?(?:user\s+)?account\b",
@@ -158,6 +176,10 @@ class UnifiedIntentMetadataExtractor:
             r"(?:the\s+)?(?:ad\s+)?group\s+\S+"
         ),
         (
+            r"\b(?:put|place|assign)\s+(?:the\s+)?(?:user\s+)?\S+\s+"
+            r"(?:in|into|to)\s+(?:the\s+)?(?:group\s+)?\S+(?:\s+group)?"
+        ),
+        (
             r"\bgrant\s+(?:the\s+)?(?:user\s+)?"
             r"\S+\s+access\s+to\s+"
             r"(?:the\s+)?(?:group\s+)?\S+"
@@ -174,6 +196,14 @@ class UnifiedIntentMetadataExtractor:
         (
             r"\bremove\s+\S+\s+from\s+"
             r"(?:the\s+)?(?:ad\s+)?group\s+\S+"
+        ),
+        (
+            r"\b(?:take|remove)\s+(?:the\s+)?(?:user\s+)?\S+\s+"
+            r"out\s+of\s+(?:the\s+)?(?:group\s+)?\S+(?:\s+group)?"
+        ),
+        (
+            r"\bremove\s+(?:the\s+)?(?:user\s+)?\S+\s+from\s+"
+            r"(?:the\s+)?\S+(?:\s+group)?"
         ),
         (
             r"\brevoke\s+(?:the\s+)?(?:user\s+)?"
@@ -272,18 +302,18 @@ class UnifiedIntentMetadataExtractor:
     }
 
     MEMBERSHIP_PATTERN = re.compile(
-        r"\b(?P<verb>add|remove)\s+"
+        r"\b(?P<verb>add|put|place|assign|remove|take)\s+"
         r"(?:the\s+)?"
         r"(?:existing\s+)?"
         r"(?:ad\s+)?"
         r"(?:user\s+)?"
         r"(?P<user>[^\s,]+)\s+"
-        r"(?P<direction>to|from)\s+"
+        r"(?P<direction>to|from|in|into|out\s+of)\s+"
         r"(?:the\s+)?"
         r"(?:existing\s+)?"
         r"(?:ad\s+)?"
         r"(?:group\s+)?"
-        r"(?P<group>[^\s,.;]+)",
+        r"(?P<group>[^\s,.;]+)(?:\s+group\b)?",
         flags=re.IGNORECASE,
     )
 
@@ -660,13 +690,26 @@ class UnifiedIntentMetadataExtractor:
             )[0]
             normalized_metadata["username_source"] = "derived_from_email"
         elif (
-            selected_intent is IntentType.GET_USER_DETAILS
+            selected_intent in {
+                IntentType.GET_USER_DETAILS,
+                IntentType.PASSWORD_RESET,
+                IntentType.FAILED_LOGIN_INVESTIGATION,
+            }
             and not normalized_metadata.get("username")
             and not normalized_metadata.get("email")
         ):
             username_match = cls.EXPLICIT_DETAILS_USERNAME_PATTERN.search(
                 user_input
             )
+            if username_match is None:
+                username_match = cls.EXPLICIT_TARGET_PATTERN.search(user_input)
+            if (
+                username_match is None
+                and selected_intent is IntentType.FAILED_LOGIN_INVESTIGATION
+            ):
+                username_match = cls.EXPLICIT_LOCKOUT_USERNAME_PATTERN.search(
+                    user_input
+                )
             if username_match:
                 normalized_metadata["username"] = username_match.group(1)
                 normalized_metadata["username_source"] = "explicit"

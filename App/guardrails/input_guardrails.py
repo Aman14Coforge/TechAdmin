@@ -587,9 +587,10 @@ INJECTION_PATTERNS: List[Tuple[str, re.Pattern]] = [
         r"\b(?:system\s+prompt|your\s+prompt|your\s+instructions|initial\s+instructions)\b",
         re.IGNORECASE)),
     ("credential_harvest", re.compile(
-        r"\b(?:show|list|reveal|get|give|dump|display|export)\b[^.]{0,30}"
-        r"\b(?:all\s+)?(?:password|passwords|credential|credentials|"
-        r"secret|secrets|token|tokens|hash|hashes)\b", re.IGNORECASE)),
+        r"(?:\b(?:show|list|reveal|dump|display|export)\b[^.]{0,30}|"
+        r"\b(?:get|give)\b[^.]{0,30}\b(?:your|my|all|the)\s+)"
+        r"(?:password|passwords|credential|credentials|secret|secrets|"
+        r"token|tokens|hash|hashes)\b", re.IGNORECASE)),
     ("developer_mode", re.compile(
         r"\b(?:developer\s+mode|debug\s+mode|god\s+mode|jailbreak|"
         r"unrestricted\s+mode|dan\s+mode)\b", re.IGNORECASE)),

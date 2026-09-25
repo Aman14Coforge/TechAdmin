@@ -149,6 +149,34 @@ OPERATION_CATALOG = {
         "risk_level": "HIGH",
         "requires_approval": True,
     },
+    "account_unlock": {
+        "operation_code": "UNLOCK_USER",
+        "operation_name": "Unlock User",
+        "tool_name": "UNLOCK_ACCOUNT",
+        "risk_level": "MEDIUM",
+        "requires_approval": False,
+    },
+    "failed_login_investigation": {
+        "operation_code": "FAILED_LOGIN_INVESTIGATION",
+        "operation_name": "Lockout / Failed Login Investigation",
+        "tool_name": "INVESTIGATE_FAILED_LOGIN",
+        "risk_level": "LOW",
+        "requires_approval": False,
+    },
+    "grant_access": {
+        "operation_code": "ADD_USER_TO_GROUP",
+        "operation_name": "Add User To Group",
+        "tool_name": "MANAGE_ACCESS",
+        "risk_level": "HIGH",
+        "requires_approval": False,
+    },
+    "revoke_access": {
+        "operation_code": "REMOVE_USER_FROM_GROUP",
+        "operation_name": "Remove User From Group",
+        "tool_name": "MANAGE_ACCESS",
+        "risk_level": "HIGH",
+        "requires_approval": True,
+    },
 }
 
 # Backend name from the tool result, mapped to the execution_type the design
@@ -508,6 +536,51 @@ def open_request(
         )
 
 
+def get_user_request_history(
+    user_id: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Return recent password-safe requests submitted by one app user."""
+
+    requester_id = _optional_uuid(user_id)
+    if requester_id is None:
+        return []
+
+    try:
+        with SessionLocal() as session:
+            statement = (
+                select(OperationRequest, Operation.operation_name)
+                .outerjoin(
+                    Operation,
+                    Operation.operation_id == OperationRequest.operation_id,
+                )
+                .where(OperationRequest.requested_by == requester_id)
+                .order_by(OperationRequest.requested_at.desc())
+                .limit(max(1, min(int(limit), 100)))
+            )
+            rows = session.execute(statement).all()
+
+        return [
+            {
+                "request_id": str(request.request_id),
+                "request": request.original_request or "",
+                "operation": operation_name or "Identity request",
+                "target": request.target_reference or "",
+                "status": request.status,
+                "requested_at": request.requested_at,
+            }
+            for request, operation_name in rows
+        ]
+    except Exception as exc:
+        logger.error(
+            "AUDIT_REQUEST_HISTORY_FAILED | user_id={} | error_type={} | detail={}",
+            requester_id,
+            type(exc).__name__,
+            _error_detail(exc),
+        )
+        return []
+
+
 def status_for(response: Dict[str, Any]) -> str:
     """
     Map a flow response to a request lifecycle status.
@@ -564,14 +637,17 @@ def close_request(
                 )
                 session.add(row)
 
-            metadata = response.get("metadata") or {}
+            metadata = response.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
             target = metadata.get("email") or metadata.get("username") or ""
 
             # The backend that actually ran decides the execution type recorded
             # against a newly created catalog entry.
-            backend = str(
-                (response.get("tool_result") or {}).get("result", {}).get("backend", "")
-            ).lower()
+            tool_result = response.get("tool_result")
+            tool_result = tool_result if isinstance(tool_result, dict) else {}
+            result = tool_result.get("result")
+            result = result if isinstance(result, dict) else {}
+            backend = str(result.get("backend", "")).lower()
 
             row.operation_id = ensure_operation_id(
                 session,
@@ -588,12 +664,9 @@ def close_request(
 
             # The tool result carries the directory's own object ID, which is
             # stable even when a UPN is renamed.
-            tool_result = response.get("tool_result") or {}
-            result = tool_result.get("result") or {}
-            if isinstance(result, dict):
-                row.target_object_id = _optional_uuid(
-                    result.get("id") or result.get("user_id")
-                )
+            row.target_object_id = _optional_uuid(
+                result.get("id") or result.get("user_id")
+            )
 
             row.status = status_for(response)
             row.completed_at = datetime.now(timezone.utc)

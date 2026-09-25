@@ -51,7 +51,6 @@ load_dotenv(
 
 from loguru import logger  # noqa: E402
 
-from App.db.operation_audit import close_request, open_request  # noqa: E402
 from App.services.email_service import EmailConfig, send_password_email  # noqa: E402
 from App.services.password_file import generate_password_file  # noqa: E402
 from App.services.password_vault import password_vault  # noqa: E402
@@ -168,6 +167,7 @@ class FlowService:
         confirmed: bool = False,
         request_id: str | None = None,
         correlation_id: str | None = None,
+        requester_id: str | None = None,
     ) -> Dict[str, Any]:
         """
         Run one Streamlit request through the compiled LangGraph.
@@ -191,7 +191,20 @@ class FlowService:
             correlation_id
             or f"corr_{uuid.uuid4().hex}"
         )
+        resolved_requester_id = requester_id or self.requester_id
         execution_identity = self._windows_identity()
+
+        if not normalized_query:
+            return {
+                "success": False,
+                "request_id": resolved_request_id,
+                "correlation_id": correlation_id,
+                "intent": None,
+                "message": "Please enter a request.",
+                "metadata": {},
+                "result": None,
+                "error": "Empty query",
+            }
 
         logger.info(
             "UI_QUERY_RECEIVED | request_id={} | correlation_id={} | "
@@ -202,30 +215,10 @@ class FlowService:
             resolved_correlation_id,
             len(normalized_query),
             confirmed,
-            self.requester_id,
+            resolved_requester_id,
             self.requester_role,
             execution_identity,
         )
-
-        # Open only for the first submission. The trusted confirmation retry
-        # reuses the same request ID and updates the already existing row.
-        if not confirmed:
-            try:
-                open_request(
-                    request_id=resolved_request_id,
-                    user_query=normalized_query,
-                    requested_by=self.requester_id,
-                    source_channel="WEB",
-                )
-            except Exception as exc:
-                # Audit failure is recorded in application logs but does not
-                # bypass guardrails or duplicate the business operation.
-                logger.exception(
-                    "OPERATION_AUDIT_OPEN_FAILED | request_id={} | "
-                    "error_type={}",
-                    resolved_request_id,
-                    type(exc).__name__,
-                )
 
         try:
             workflow_response = self.workflow.invoke(
@@ -233,8 +226,9 @@ class FlowService:
                 request_id=resolved_request_id,
                 correlation_id=resolved_correlation_id,
                 confirmed=bool(confirmed),
-                requester_id=self.requester_id,
+                requester_id=resolved_requester_id,
                 requester_role=self.requester_role,
+                source_channel="WEB",
             )
 
             if not isinstance(workflow_response, dict):
@@ -255,7 +249,7 @@ class FlowService:
 
             safe_response["execution_context"] = {
                 "windows_identity": execution_identity,
-                "requester_id": self.requester_id,
+                "requester_id": resolved_requester_id,
                 "requester_role": self.requester_role,
             }
 
@@ -274,20 +268,6 @@ class FlowService:
                 dashboard_secret is not None,
             )
 
-            try:
-                # safe_response has already passed graph output sanitization.
-                close_request(
-                    resolved_request_id,
-                    safe_response,
-                )
-            except Exception as exc:
-                logger.exception(
-                    "OPERATION_AUDIT_CLOSE_FAILED | request_id={} | "
-                    "error_type={}",
-                    resolved_request_id,
-                    type(exc).__name__,
-                )
-
             return safe_response
 
         except Exception as exc:
@@ -299,38 +279,23 @@ class FlowService:
                 type(exc).__name__,
             )
 
-            failure_response = self._failure_response(
-                request_id=resolved_request_id,
-                correlation_id=resolved_correlation_id,
-                error_type=type(exc).__name__,
-                execution_identity=execution_identity,
-                requester_id=self.requester_id,
-                requester_role=self.requester_role,
-            )
-
-            try:
-                close_request(
-                    resolved_request_id,
-                    {
-                        "success": False,
-                        "user_input": normalized_query,
-                        "error": type(exc).__name__,
-                        "orchestration": {
-                            "engine": "langgraph",
-                            "graph": "TechAdminWorkflow",
-                            "compiled": True,
-                        },
-                    },
-                )
-            except Exception as audit_exc:
-                logger.exception(
-                    "OPERATION_AUDIT_FAILURE_CLOSE_FAILED | "
-                    "request_id={} | error_type={}",
-                    resolved_request_id,
-                    type(audit_exc).__name__,
-                )
-
-            return failure_response
+            return {
+                "success": False,
+                "request_id": resolved_request_id,
+                "correlation_id": correlation_id,
+                "intent": None,
+                "message": (
+                    "An unexpected error occurred while processing the request."
+                ),
+                "metadata": {},
+                "result": None,
+                "error": type(exc).__name__,
+                "execution_context": {
+                    "windows_identity": execution_identity,
+                    "requester_id": resolved_requester_id,
+                    "requester_role": self.requester_role,
+                },
+            }
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ No graph node calls DemoFlow.execute_flow().
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Literal, TypedDict
 from uuid import uuid4
 
@@ -14,6 +15,7 @@ from langgraph.graph import END, START, StateGraph
 from loguru import logger
 
 from App.agents.identity_agent import IdentityAgent
+from App.db.operation_audit import close_request, open_request
 from App.guardrails import guardrail_engine
 from App.guardrails.engine import audit
 from App.intent.unified_extractor import UnifiedIntentMetadataExtractor
@@ -383,6 +385,7 @@ class TechAdminWorkflow:
         confirmed: bool = False,
         requester_id: str | None = None,
         requester_role: str | None = None,
+        source_channel: str = "WORKFLOW",
     ) -> dict[str, Any]:
         initial: TechAdminGraphState = {
             "user_input": user_input,
@@ -399,20 +402,54 @@ class TechAdminWorkflow:
             "stage": "start",
             "error": None,
         }
+        started_at = datetime.now(timezone.utc)
+        response: dict[str, Any] | None = None
+
+        if not confirmed:
+            open_request(
+                request_id=initial["request_id"],
+                user_query=user_input,
+                requested_by=requester_id,
+                source_channel=source_channel,
+            )
+
         logger.info(
             "LANGGRAPH_INVOKE_STARTED | request_id={} | correlation_id={} | confirmed={}",
             initial["request_id"], initial["correlation_id"], initial["confirmed"],
         )
-        final_state = self.graph.invoke(initial)
-        response = final_state.get("response")
-        if not isinstance(response, dict):
-            raise RuntimeError("LangGraph completed without a dictionary response.")
-        logger.info(
-            "LANGGRAPH_INVOKE_COMPLETED | request_id={} | correlation_id={} | intent={} | success={}",
-            response.get("request_id"), response.get("correlation_id"),
-            response.get("intent"), response.get("success"),
-        )
-        return response
+        try:
+            final_state = self.graph.invoke(initial)
+            response = final_state.get("response")
+            if not isinstance(response, dict):
+                raise RuntimeError("LangGraph completed without a dictionary response.")
+            logger.info(
+                "LANGGRAPH_INVOKE_COMPLETED | request_id={} | correlation_id={} | intent={} | success={}",
+                response.get("request_id"), response.get("correlation_id"),
+                response.get("intent"), response.get("success"),
+            )
+            return response
+        except Exception as exc:
+            response = {
+                "success": False,
+                "request_id": initial["request_id"],
+                "correlation_id": initial["correlation_id"],
+                "user_input": user_input,
+                "error": type(exc).__name__,
+            }
+            raise
+        finally:
+            close_request(
+                initial["request_id"],
+                response or {
+                    "success": False,
+                    "request_id": initial["request_id"],
+                    "correlation_id": initial["correlation_id"],
+                    "user_input": user_input,
+                    "error": "Workflow did not produce a response",
+                },
+                started_at=started_at,
+                finished_at=datetime.now(timezone.utc),
+            )
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
         """Compatibility alias for callers that use execute()."""
