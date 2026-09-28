@@ -163,7 +163,170 @@ st.markdown(
     div[data-testid="stChatInput"] {
         margin-top: 1rem;
     }
- 
+
+    .result-table {
+        border-collapse: separate;
+        border-spacing: 0;
+        background-color: #ffffff !important;
+        border: 1px solid #d9e2ec !important;
+        border-radius: 0.55rem;
+        color-scheme: light;
+        overflow: hidden;
+        width: 100%;
+    }
+
+    .result-table tbody,
+    .result-table tr {
+        background-color: #ffffff !important;
+    }
+
+    .result-table td {
+        background-color: #ffffff !important;
+        border-bottom: 1px solid #d9e2ec !important;
+        padding: 0.55rem 0.8rem;
+        vertical-align: middle;
+    }
+
+    .result-table tr:last-child td {
+        border-bottom: 0;
+    }
+
+    .result-table .result-field {
+        color: #344054 !important;
+        font-weight: 700;
+        width: 34%;
+    }
+
+    .result-table .result-value {
+        color: #000000 !important;
+    }
+
+    .status-indicator {
+        border: 1px solid transparent;
+        border-radius: 999px;
+        display: inline-block;
+        font-size: 0.78rem;
+        font-weight: 800;
+        line-height: 1;
+        padding: 0.32rem 0.65rem;
+    }
+
+    .status-indicator-green {
+        background: #d9f5e3;
+        border-color: #63be83;
+        color: #176b35;
+    }
+
+    .status-indicator-red {
+        background: #fde0e0;
+        border-color: #e27676;
+        color: #9b1c1c;
+    }
+
+    .status-indicator-neutral {
+        background: #edf0f2;
+        border-color: #c5cdd3;
+        color: #52606d;
+    }
+
+    html[data-theme="dark"] .result-table,
+    body[data-theme="dark"] .result-table,
+    [data-theme="dark"] .result-table,
+    [data-testid="stAppViewContainer"][data-theme="dark"] .result-table,
+    [data-testid="stApp"][data-theme="dark"] .result-table {
+        background-color: #101820 !important;
+        border-color: #465663 !important;
+        color-scheme: dark;
+    }
+
+    html[data-theme="dark"] .result-table tbody,
+    html[data-theme="dark"] .result-table tr,
+    body[data-theme="dark"] .result-table tbody,
+    body[data-theme="dark"] .result-table tr,
+    [data-theme="dark"] .result-table tbody,
+    [data-theme="dark"] .result-table tr,
+    [data-testid="stAppViewContainer"][data-theme="dark"] .result-table tbody,
+    [data-testid="stAppViewContainer"][data-theme="dark"] .result-table tr,
+    [data-testid="stApp"][data-theme="dark"] .result-table tbody,
+    [data-testid="stApp"][data-theme="dark"] .result-table tr {
+        background-color: #101820 !important;
+    }
+
+    html[data-theme="dark"] .result-table td,
+    body[data-theme="dark"] .result-table td,
+    [data-theme="dark"] .result-table td,
+    [data-testid="stAppViewContainer"][data-theme="dark"] .result-table td,
+    [data-testid="stApp"][data-theme="dark"] .result-table td {
+        background-color: #101820 !important;
+        border-bottom-color: #34434f !important;
+    }
+
+    html[data-theme="dark"] .result-table .result-field,
+    body[data-theme="dark"] .result-table .result-field,
+    [data-theme="dark"] .result-table .result-field,
+    [data-testid="stAppViewContainer"][data-theme="dark"] .result-table .result-field,
+    [data-testid="stApp"][data-theme="dark"] .result-table .result-field {
+        color: #b8c5cf !important;
+    }
+
+    html[data-theme="dark"] .result-table .result-value,
+    body[data-theme="dark"] .result-table .result-value,
+    [data-theme="dark"] .result-table .result-value,
+    [data-testid="stAppViewContainer"][data-theme="dark"] .result-table .result-value,
+    [data-testid="stApp"][data-theme="dark"] .result-table .result-value {
+        color: #f1f5f8 !important;
+    }
+
+    .result-table.result-table-dark {
+        background-color: #101820 !important;
+        border-color: #465663 !important;
+        color-scheme: dark;
+    }
+
+    .result-table.result-table-dark tbody,
+    .result-table.result-table-dark tr,
+    .result-table.result-table-dark td {
+        background-color: #101820 !important;
+    }
+
+    .result-table.result-table-dark td {
+        border-bottom-color: #34434f !important;
+    }
+
+    .result-table.result-table-dark .result-field {
+        color: #b8c5cf !important;
+    }
+
+    .result-table.result-table-dark .result-value {
+        color: #f1f5f8 !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        .result-table {
+            background-color: #101820 !important;
+            border-color: #465663 !important;
+            color-scheme: dark;
+        }
+
+        .result-table tbody,
+        .result-table tr,
+        .result-table td {
+            background-color: #101820 !important;
+        }
+
+        .result-table td {
+            border-bottom-color: #34434f !important;
+        }
+
+        .result-table .result-field {
+            color: #b8c5cf !important;
+        }
+
+        .result-table .result-value {
+            color: #f1f5f8 !important;
+        }
+    }
+
     .operation-card {
         border: 1px solid var(--tech-line);
         border-left: 4px solid var(--tech-blue);
@@ -244,7 +407,7 @@ def render_sign_in_screen(
         st.warning(microsoft_message)
  
     microsoft_tab, local_tab = st.tabs(
-        ["Microsoft SSO", "Test account"]
+        ["Microsoft SSO", "Local Authentication"]
     )
  
     with microsoft_tab:
@@ -362,7 +525,7 @@ def require_authentication() -> dict[str, Any]:
         )
  
         microsoft_tab, local_tab = st.tabs(
-            ["Microsoft SSO", "Test account"]
+            ["Microsoft SSO", "Local Authentication"]
         )
  
         with microsoft_tab:
@@ -604,6 +767,7 @@ def display_text(value: Any) -> str:
 def show_table(
     rows: Iterable[tuple[str, Any]],
     caption: str = "",
+    fit_all_rows: bool = False,
 ) -> None:
     """Render a two-column Field/Value table."""
  
@@ -619,6 +783,58 @@ def show_table(
     if caption:
         st.markdown(f"**{caption}**")
  
+    status_fields = {
+        "enabled": lambda value: value == "yes",
+        "lockedout": lambda value: value == "no",
+        "passwordexpired": lambda value: value == "no",
+        "passwordneverexpires": lambda value: value == "no",
+    }
+
+    if fit_all_rows:
+        rows_html: list[str] = []
+        for label, raw_value in prepared_rows:
+            value = display_text(raw_value)
+            status_resolver = status_fields.get(label.casefold())
+            value_html = html.escape(value)
+
+            if status_resolver is not None:
+                value_state = (
+                    "green"
+                    if status_resolver(value.casefold())
+                    else "red"
+                )
+                value_html = (
+                    f'<span class="status-indicator status-indicator-'
+                    f'{value_state}">{html.escape(value)}</span>'
+                )
+
+            rows_html.append(
+                "<tr>"
+                f'<td class="result-field">{html.escape(label)}</td>'
+                f'<td class="result-value">{value_html}</td>'
+                "</tr>"
+            )
+
+        theme = getattr(st.context, "theme", {})
+        theme_type = (
+            theme.get("type")
+            if isinstance(theme, dict)
+            else getattr(theme, "type", None)
+        )
+        table_class = (
+            "result-table result-table-dark"
+            if theme_type == "dark"
+            else "result-table"
+        )
+
+        st.markdown(
+            f'<table class="{table_class}"><tbody>'
+            f'{"".join(rows_html)}'
+            "</tbody></table>",
+            unsafe_allow_html=True,
+        )
+        return
+
     frame = pd.DataFrame(
         [
             {
@@ -628,12 +844,38 @@ def show_table(
             for label, value in prepared_rows
         ]
     )
- 
-    st.dataframe(
-        frame,
-        hide_index=True,
-        width="stretch",
-    )
+
+    def style_status(row: pd.Series) -> list[str]:
+        field = str(row["Field"]).casefold()
+        value = str(row["Value"]).casefold()
+        is_positive = status_fields.get(field)
+
+        if is_positive is None:
+            return ["", ""]
+
+        if is_positive(value):
+            color = "#0b5d1e"
+            background = "#b7e4c7"
+        else:
+            color = "#8f1010"
+            background = "#ffc7c7"
+
+        style = (
+            f"color: {color}; background-color: {background}; "
+            "font-weight: 800;"
+        )
+        return ["", style]
+
+    styled_frame = frame.style.apply(style_status, axis=1)
+
+    dataframe_options: dict[str, Any] = {
+        "hide_index": True,
+        "width": "stretch",
+    }
+    if fit_all_rows:
+        dataframe_options["height"] = "content"
+
+    st.dataframe(styled_frame, **dataframe_options)
  
  
 def flatten_rows(
@@ -858,11 +1100,6 @@ def render_password_reset_actions(result: Dict[str, Any]) -> None:
         "Result",
     )
  
-    execution = result.get("execution")
- 
-    if isinstance(execution, dict):
-        render_script_execution(execution)
- 
     if manager_name == "Not Available":
         st.info(
             "No manager is assigned. The password file can still be "
@@ -881,6 +1118,43 @@ def render_password_reset_actions(result: Dict[str, Any]) -> None:
     render_password_actions(token, manager_email)
  
  
+def user_result_rows(user_record: Dict[str, Any]) -> list[tuple[str, Any]]:
+    """Build the allowlisted fields shown in the user Result table."""
+
+    normalized = {
+        key.casefold().replace("_", ""): value
+        for key, value in user_record.items()
+    }
+    fields = [
+        ("Name", ("name",)),
+        ("Displayname", ("displayname",)),
+        ("Samaccountname", ("samaccountname",)),
+        ("Mail", ("mail",)),
+        ("Userprincipalname", ("userprincipalname",)),
+        ("Mobilephone", ("mobilephone",)),
+        ("Description", ("description",)),
+        ("Department", ("department",)),
+        ("Enabled", ("enabled",)),
+        ("Lockedout", ("lockedout",)),
+        ("Passwordexpired", ("passwordexpired",)),
+        ("Passwordneverexpires", ("passwordneverexpires",)),
+        ("Passwordlastset", ("passwordlastset",)),
+        ("Badpasswordcount", ("badpasswordcount", "badpwdcount")),
+        ("Distinguishedname", ("distinguishedname",)),
+        ("Canonicalname", ("canonicalname",)),
+        ("Whencreated", ("whencreated",)),
+        ("Manager name", ("managername",)),
+        ("Manager Email", ("manageremail",)),
+    ]
+
+    return [
+        (label, normalized[key])
+        for label, keys in fields
+        for key in keys
+        if key in normalized and normalized[key] not in (None, "")
+    ]
+
+
 def render_result(intent: str, result: Dict[str, Any]) -> None:
     """Render generic, password-reset, or investigation tool results."""
  
@@ -914,7 +1188,6 @@ def render_result(intent: str, result: Dict[str, Any]) -> None:
         render_password_reset_actions(result)
         return
  
-    execution = result.get("execution")
     user_record = result.get("user")
  
     excluded = {
@@ -928,15 +1201,11 @@ def render_result(intent: str, result: Dict[str, Any]) -> None:
     }
  
     if isinstance(user_record, dict):
-        rows = [("Backend", result.get("backend"))]
-        rows.extend(flatten_rows(user_record))
+        rows = user_result_rows(user_record)
     else:
         rows = flatten_rows(result, excluded)
  
-    show_table(rows, "Result")
- 
-    if isinstance(execution, dict):
-        render_script_execution(execution)
+    show_table(rows, "Result", fit_all_rows=True)
  
  
 def render_operation_summary(response: Dict[str, Any]) -> None:
@@ -1008,94 +1277,19 @@ def render_operation_summary(response: Dict[str, Any]) -> None:
  
  
 def render_response(response: Dict[str, Any]) -> None:
-    """Render one complete LangGraph workflow response."""
- 
-    render_operation_summary(response)
-    confidence = response.get("confidence")
- 
-    show_table(
-        [
-            ("Succeeded", response.get("success")),
-            ("Intent", response.get("intent")),
-            (
-                "Confidence",
-                (
-                    f"{confidence:.0%}"
-                    if isinstance(confidence, (int, float))
-                    else None
-                ),
-            ),
-            ("Request ID", response.get("request_id")),
-            ("Correlation ID", response.get("correlation_id")),
-            ("Explanation", response.get("explanation")),
-            ("Message", response.get("message")),
-            ("Error", response.get("error")),
-        ],
-        "Summary",
-    )
- 
-    metadata = response.get("metadata")
- 
-    if isinstance(metadata, dict):
-        show_table(
-            flatten_rows(metadata, SENSITIVE_HISTORY_KEYS),
-            "Extracted metadata",
-        )
- 
-    render_guardrails(response)
- 
-    show_table(
-        [
-            ("Agent", response.get("selected_agent")),
-            ("MCP server", response.get("selected_mcp_server")),
-            ("MCP tool", response.get("selected_mcp_tool")),
-            ("Application tool", response.get("selected_tool")),
-        ],
-        "Routing",
-    )
- 
-    orchestration = response.get("orchestration")
- 
-    if isinstance(orchestration, dict):
-        show_table(
-            flatten_rows(orchestration),
-            "Orchestration",
-        )
- 
-    execution_context = response.get("execution_context")
- 
-    if isinstance(execution_context, dict):
-        show_table(
-            flatten_rows(execution_context),
-            "Execution context",
-        )
- 
+    """Render only the operation Result table."""
+
     tool_result = response.get("tool_result")
- 
-    if isinstance(tool_result, dict) and tool_result:
-        show_table(
-            [
-                ("Tool name", tool_result.get("tool_name")),
-                ("Status", tool_result.get("status")),
-                ("Operation ID", tool_result.get("operation_id")),
-                ("Succeeded", tool_result.get("success")),
-                ("Message", tool_result.get("message")),
-                ("Error", tool_result.get("error")),
-                (
-                    "API integration pending",
-                    tool_result.get("api_integration_pending"),
-                ),
-            ],
-            "Tool execution",
-        )
- 
-        result = tool_result.get("result")
- 
-        if isinstance(result, dict):
-            render_result(
-                response.get("intent") or "",
-                result,
-            )
+    result = (
+        tool_result.get("result")
+        if isinstance(tool_result, dict)
+        else response.get("result")
+    )
+
+    if isinstance(result, dict):
+        render_result(response.get("intent") or "", result)
+    else:
+        show_table([("Message", response.get("message"))], "Result")
  
     expander_label = (
         "Technical investigation details"
@@ -1307,7 +1501,6 @@ def render_sidebar() -> None:
             else None
         )
         if user_id:
-            st.subheader("Your recent requests")
             history = get_user_request_history(user_id)
             if history:
                 for item in history:

@@ -233,6 +233,35 @@ try {
 
     $groupCount = @($user.MemberOf).Count
 
+    $managerName = $null
+    $managerEmail = $null
+    $managerDn = [string]$user.Manager
+
+    if (-not [string]::IsNullOrWhiteSpace($managerDn)) {
+        try {
+            $managerUser = Get-ADUser `
+                -Identity $managerDn `
+                -Server $pdcEmulator `
+                -Properties DisplayName, Mail, UserPrincipalName `
+                -ErrorAction Stop
+
+            $managerName = $managerUser.DisplayName
+            if ([string]::IsNullOrWhiteSpace($managerName)) {
+                $managerName = $managerUser.Name
+            }
+
+            $managerEmail = $managerUser.Mail
+            if ([string]::IsNullOrWhiteSpace($managerEmail)) {
+                $managerEmail = $managerUser.UserPrincipalName
+            }
+        }
+        catch {
+            if ($managerDn -match 'CN=([^,]+)') {
+                $managerName = $matches[1]
+            }
+        }
+    }
+
     $result = [ordered]@{
         Success = $true
         Name = $user.Name
@@ -268,7 +297,9 @@ try {
         EmployeeID = $user.EmployeeID
         EmployeeNumber = $user.EmployeeNumber
         Description = $user.Description
-        Manager = $user.Manager
+        Manager = $managerDn
+        ManagerName = $managerName
+        ManagerEmail = $managerEmail
         DirectGroupMembershipCount = $groupCount
         WhenCreated = ConvertTo-IsoDateTime -Value $user.whenCreated
         WhenChanged = ConvertTo-IsoDateTime -Value $user.whenChanged
