@@ -1,5 +1,9 @@
-"""TechAdmin Streamlit UI with authentication, LangGraph execution, secure
-password delivery, focused user-details rendering, and CrowdStrike reporting.
+"""TechAdmin Streamlit UI.
+
+The main dashboard shows business-facing operation results only. Technical
+workflow data, including extraction, guardrails, routing, orchestration,
+execution context, and tool execution metadata, remains available in the
+Raw response (JSON) expander.
 """
 from __future__ import annotations
 
@@ -27,15 +31,24 @@ from App.db.login_authorization import authorize_claims, extract_display_name
 from App.db.operation_audit import get_user_request_history
 from investigation_report_ui import render_investigation_report
 
+
+# ---------------------------------------------------------------------------
+# Page configuration and styling
+# ---------------------------------------------------------------------------
+
 st.set_page_config(page_title="TechAdmin", page_icon="🛠️", layout="wide")
 
 
 def enforce_https_origin() -> None:
+    """Redirect insecure access on the public hostname to HTTPS."""
+
     public_url = os.getenv(
-        "TECHADMIN_PUBLIC_URL", "https://techadmin.coforge.com"
+        "TECHADMIN_PUBLIC_URL",
+        "https://techadmin.coforge.com",
     ).strip()
     if not public_url:
         return
+
     st.markdown(
         f"""
         <script>
@@ -43,7 +56,10 @@ def enforce_https_origin() -> None:
             try {{
                 const publicUrl = new URL("{public_url}");
                 const current = new URL(window.location.href);
-                if (current.protocol === "http:" && current.hostname === publicUrl.hostname) {{
+                if (
+                    current.protocol === "http:" &&
+                    current.hostname === publicUrl.hostname
+                ) {{
                     const target = new URL(window.location.href);
                     target.protocol = "https:";
                     target.port = publicUrl.port || "";
@@ -63,30 +79,97 @@ st.markdown(
     """
     <style>
     :root {
-        --tech-ink:#18212f; --tech-muted:#667085; --tech-blue:#1769aa;
-        --tech-blue-soft:#eaf4fb; --tech-line:#d9e2ec;
-        --ok:#18864b; --bad:#c53030; --warn:#b7791f;
+        --tech-ink:#18212f;
+        --tech-muted:#667085;
+        --tech-blue:#1769aa;
+        --tech-blue-soft:#eaf4fb;
+        --tech-line:#d9e2ec;
+        --ok:#18864b;
+        --bad:#c53030;
+        --warn:#b7791f;
     }
     [data-testid="stSidebar"] {border-right:1px solid var(--tech-line)}
     [data-testid="stSidebar"] > div:first-child {padding-top:2rem}
-    .sidebar-brand {border-bottom:1px solid var(--tech-line);margin:0 0 1.5rem;padding:0 0 1.25rem}
-    .company-name {color:#0d4f87;font-size:1.25rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-    .sidebar-brand h1 {color:var(--tech-ink);font-size:1.8rem;line-height:1;margin:.45rem 0 0}
-    .tech-kicker {color:var(--tech-blue);font-size:.75rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
-    .tech-panel {background:linear-gradient(135deg,var(--tech-blue-soft),#fff);border:1px solid #cfe3f2;border-radius:.75rem;padding:1.25rem 1.35rem;margin:.5rem 0 1.25rem}
-    .tech-panel strong {color:var(--tech-ink);display:block;font-size:1.05rem;margin-bottom:.3rem}
+    .sidebar-brand {
+        border-bottom:1px solid var(--tech-line);
+        margin:0 0 1.5rem;
+        padding:0 0 1.25rem;
+    }
+    .company-name {
+        color:#0d4f87;
+        font-size:1.25rem;
+        font-weight:800;
+        letter-spacing:.08em;
+        text-transform:uppercase;
+    }
+    .sidebar-brand h1 {
+        color:var(--tech-ink);
+        font-size:1.8rem;
+        line-height:1;
+        margin:.45rem 0 0;
+    }
+    .tech-kicker {
+        color:var(--tech-blue);
+        font-size:.75rem;
+        font-weight:700;
+        letter-spacing:.12em;
+        text-transform:uppercase;
+    }
+    .tech-panel {
+        background:linear-gradient(135deg,var(--tech-blue-soft),#fff);
+        border:1px solid #cfe3f2;
+        border-radius:.75rem;
+        padding:1.25rem 1.35rem;
+        margin:.5rem 0 1.25rem;
+    }
+    .tech-panel strong {
+        color:var(--tech-ink);
+        display:block;
+        font-size:1.05rem;
+        margin-bottom:.3rem;
+    }
     .tech-panel span {color:var(--tech-muted)}
-    .operation-card {border:1px solid var(--tech-line);border-left:4px solid var(--tech-blue);border-radius:.55rem;padding:1rem 1.15rem;margin:1rem 0 1.25rem;background:#fff}
+    .operation-card {
+        border:1px solid var(--tech-line);
+        border-left:4px solid var(--tech-blue);
+        border-radius:.55rem;
+        padding:1rem 1.15rem;
+        margin:1rem 0 1.25rem;
+        background:#fff;
+    }
     .operation-card.success {border-left-color:var(--ok)}
     .operation-card.warning {border-left-color:var(--warn)}
     .operation-card.failure {border-left-color:var(--bad)}
-    .operation-label {color:var(--tech-muted);font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
-    .operation-title {color:var(--tech-ink);font-size:1.2rem;font-weight:700;margin-top:.25rem}
+    .operation-label {
+        color:var(--tech-muted);
+        font-size:.72rem;
+        font-weight:700;
+        letter-spacing:.08em;
+        text-transform:uppercase;
+    }
+    .operation-title {
+        color:var(--tech-ink);
+        font-size:1.2rem;
+        font-weight:700;
+        margin-top:.25rem;
+    }
     .operation-meta {color:var(--tech-muted);margin-top:.45rem}
-    .status-card {border:1px solid var(--tech-line);border-radius:.75rem;padding:1rem;background:#fff;min-height:108px}
+    .status-card {
+        border:1px solid var(--tech-line);
+        border-radius:.75rem;
+        padding:1rem;
+        background:#fff;
+        min-height:108px;
+    }
     .status-card.ok {border-left:5px solid var(--ok);background:#f1fbf5}
     .status-card.bad {border-left:5px solid var(--bad);background:#fff5f5}
-    .status-label {font-size:.72rem;color:var(--tech-muted);font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+    .status-label {
+        font-size:.72rem;
+        color:var(--tech-muted);
+        font-weight:700;
+        text-transform:uppercase;
+        letter-spacing:.06em;
+    }
     .status-value {font-size:1.25rem;font-weight:800;margin-top:.35rem}
     .status-value.ok {color:var(--ok)}
     .status-value.bad {color:var(--bad)}
@@ -95,9 +178,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
 # ---------------------------------------------------------------------------
-# Authentication
+# Authentication and app_users authorization
 # ---------------------------------------------------------------------------
+
 
 def microsoft_user_is_logged_in() -> bool:
     try:
@@ -116,10 +201,16 @@ def render_sign_in_screen(*, microsoft_message: str | None = None) -> None:
     st.subheader("Sign in to TechAdmin")
     if microsoft_message:
         st.warning(microsoft_message)
+
     microsoft_tab, local_tab = st.tabs(["Microsoft SSO", "Test account"])
     with microsoft_tab:
         st.write("Use your Coforge Microsoft account.")
-        if st.button("Sign in with Microsoft", type="primary", width="stretch", key="microsoft_sign_in"):
+        if st.button(
+            "Sign in with Microsoft",
+            type="primary",
+            width="stretch",
+            key="microsoft_sign_in",
+        ):
             st.login()
     with local_tab:
         render_local_login()
@@ -130,13 +221,21 @@ def enforce_app_user_access(claims: dict[str, Any]) -> None:
     display_name = extract_display_name(claims)
     if not display_name:
         st.session_state.app_user_access = {
-            "display_name": "", "allowed": True,
-            "reason": "legacy_identity_without_display_name", "message": "",
-            "user_principal_name": "", "user_id": "", "department": "",
+            "display_name": "",
+            "allowed": True,
+            "reason": "legacy_identity_without_display_name",
+            "message": "",
+            "user_principal_name": "",
+            "user_id": "",
+            "department": "",
         }
         return
+
     cached = st.session_state.get("app_user_access")
-    if not (isinstance(cached, dict) and cached.get("display_name") == display_name):
+    if not (
+        isinstance(cached, dict)
+        and cached.get("display_name") == display_name
+    ):
         decision = authorize_claims(claims)
         cached = {
             "display_name": display_name,
@@ -148,10 +247,20 @@ def enforce_app_user_access(claims: dict[str, Any]) -> None:
             "department": decision.department,
         }
         st.session_state.app_user_access = cached
+
     if cached.get("allowed") is True:
         return
+
     st.title("TechAdmin")
-    st.error(cached.get("message") or "This identity is not authorized to use TechAdmin.")
+    st.error(
+        cached.get("message")
+        or "This identity is not authorized to use TechAdmin."
+    )
+    st.caption(
+        f"Signed in as: {display_name or 'unknown'}. Access is granted only "
+        "to active users registered in the TechAdmin app_users directory."
+    )
+
     if claims.get("auth_source") == "local_test_account":
         if st.button("Return to sign in", key="denied_local_sign_out"):
             clear_local_authentication_state()
@@ -168,45 +277,87 @@ def require_authentication() -> dict[str, Any]:
         enforce_app_user_access(local_user)
         render_authenticated_user(local_user)
         return local_user
+
     if not microsoft_user_is_logged_in():
         render_sign_in_screen()
+
     claims = dict(st.user)
     claims.pop("is_logged_in", None)
+
     if not extract_display_name(claims):
         st.title("TechAdmin")
-        st.warning("The current Microsoft session does not contain a usable identity.")
-        microsoft_tab, local_tab = st.tabs(["Microsoft SSO", "Test account"])
+        st.warning(
+            "The current Microsoft session does not contain a usable identity."
+        )
+        microsoft_tab, local_tab = st.tabs(
+            ["Microsoft SSO", "Test account"]
+        )
         with microsoft_tab:
-            st.write("Sign out of the incomplete Microsoft session, then sign in again.")
-            if st.button("Sign out and restart", type="primary", width="stretch"):
+            st.write(
+                "Sign out of the incomplete Microsoft session, then sign in again."
+            )
+            if st.button(
+                "Sign out and restart",
+                type="primary",
+                width="stretch",
+            ):
                 clear_local_authentication_state()
                 st.logout()
         with local_tab:
             render_local_login()
         st.stop()
+
     enforce_app_user_access(claims)
     render_authenticated_user(claims)
     return claims
 
 
 def render_local_login() -> None:
-    enabled = os.getenv("TECHADMIN_LOCAL_LOGIN_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"}
+    enabled = (
+        os.getenv("TECHADMIN_LOCAL_LOGIN_ENABLED", "false")
+        .strip()
+        .casefold()
+        in {"1", "true", "yes", "on"}
+    )
     if not enabled:
         st.info("The local test account is disabled.")
         return
+
     with st.form("local_login_form", clear_on_submit=False):
         username = st.text_input("Username", key="local_login_username")
-        password = st.text_input("Password", type="password", key="local_login_password")
-        submitted = st.form_submit_button("Sign in", type="primary", width="stretch")
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="local_login_password",
+        )
+        submitted = st.form_submit_button(
+            "Sign in",
+            type="primary",
+            width="stretch",
+        )
+
     if not submitted:
         return
-    expected_username = os.getenv("TECHADMIN_LOCAL_LOGIN_USERNAME", "TechAdminTestUser").strip()
+
+    expected_username = os.getenv(
+        "TECHADMIN_LOCAL_LOGIN_USERNAME",
+        "TechAdminTestUser",
+    ).strip()
     expected_password = os.getenv("TECHADMIN_LOCAL_LOGIN_PASSWORD", "")
-    valid_username = hmac.compare_digest(username.strip().casefold(), expected_username.casefold())
-    valid_password = bool(expected_password) and hmac.compare_digest(password, expected_password)
+
+    valid_username = hmac.compare_digest(
+        username.strip().casefold(),
+        expected_username.casefold(),
+    )
+    valid_password = bool(expected_password) and hmac.compare_digest(
+        password,
+        expected_password,
+    )
+
     if not (valid_username and valid_password):
         st.error("Invalid username or password.")
         return
+
     st.session_state.local_authenticated_user = {
         "name": expected_username,
         "preferred_username": expected_username,
@@ -219,22 +370,36 @@ def render_local_login() -> None:
 def render_authenticated_user(claims: dict[str, Any]) -> None:
     with st.sidebar:
         st.markdown(
-            '<div class="sidebar-brand"><div class="company-name">Coforge</div>'
-            '<h1>TechAdmin</h1><div class="tech-kicker">IT Operations</div></div>',
+            '<div class="sidebar-brand">'
+            '<div class="company-name">Coforge</div>'
+            '<h1>TechAdmin</h1>'
+            '<div class="tech-kicker">IT Operations</div>'
+            '</div>',
             unsafe_allow_html=True,
         )
-        display_name = claims.get("name") or claims.get("preferred_username") or claims.get("email") or "Authenticated user"
+        display_name = (
+            claims.get("name")
+            or claims.get("preferred_username")
+            or claims.get("email")
+            or "Authenticated user"
+        )
         st.caption(f"Signed in as {display_name}")
+
         if claims.get("auth_source") == "local_test_account":
             if st.button("Sign out", key="local_sign_out", width="stretch"):
                 clear_local_authentication_state()
                 st.rerun()
-        elif st.button("Sign out", key="microsoft_sign_out", width="stretch"):
+        elif st.button(
+            "Sign out",
+            key="microsoft_sign_out",
+            width="stretch",
+        ):
             clear_local_authentication_state()
             st.logout()
 
+
 # ---------------------------------------------------------------------------
-# Constants and helpers
+# Constants, service, state, and generic helpers
 # ---------------------------------------------------------------------------
 
 EXAMPLES = [
@@ -249,7 +414,10 @@ EXAMPLES = [
     "Investigate failed logins for MigrationTest2@Coforge.com in the last 24 hours",
     "Investigate account lockout for MigrationTest3@Coforge.com in the last 7 days",
 ]
-YES_WORDS = {"yes", "y", "confirm", "confirmed", "proceed", "approve", "approved", "ok", "okay"}
+YES_WORDS = {
+    "yes", "y", "confirm", "confirmed", "proceed",
+    "approve", "approved", "ok", "okay",
+}
 NO_WORDS = {"no", "n", "cancel", "stop", "abort", "nevermind"}
 SENSITIVE_HISTORY_KEYS = {
     "new_password", "temporary_password", "password", "initial_password",
@@ -279,20 +447,33 @@ def display_text(value: Any) -> str:
     return str(value)
 
 
-def show_table(rows: Iterable[tuple[str, Any]], caption: str = "") -> None:
-    prepared = [(label, value) for label, value in rows if value not in (None, "")]
+def show_table(
+    rows: Iterable[tuple[str, Any]],
+    caption: str = "",
+) -> None:
+    prepared = [
+        (label, value)
+        for label, value in rows
+        if value not in (None, "")
+    ]
     if not prepared:
         return
     if caption:
         st.markdown(f"**{caption}**")
     st.dataframe(
-        pd.DataFrame([{"Field": label, "Value": display_text(value)} for label, value in prepared]),
+        pd.DataFrame([
+            {"Field": label, "Value": display_text(value)}
+            for label, value in prepared
+        ]),
         hide_index=True,
         width="stretch",
     )
 
 
-def flatten_rows(data: Dict[str, Any], excluded: set[str] | None = None) -> list[tuple[str, Any]]:
+def flatten_rows(
+    data: Dict[str, Any],
+    excluded: set[str] | None = None,
+) -> list[tuple[str, Any]]:
     rows: list[tuple[str, Any]] = []
     for key, value in data.items():
         if key in (excluded or set()) or value in (None, ""):
@@ -324,11 +505,17 @@ def register_dashboard_secret(response: Dict[str, Any]) -> bool:
     return False
 
 
-def _ci_get(data: dict[str, Any], *names: str, default: Any = None) -> Any:
-    """Case-insensitive lookup supporting PascalCase, camelCase, and snake_case."""
+def _ci_get(
+    data: dict[str, Any],
+    *names: str,
+    default: Any = None,
+) -> Any:
     if not isinstance(data, dict):
         return default
-    normalized = {str(key).replace("_", "").casefold(): value for key, value in data.items()}
+    normalized = {
+        str(key).replace("_", "").casefold(): value
+        for key, value in data.items()
+    }
     for name in names:
         key = name.replace("_", "").casefold()
         if key in normalized:
@@ -339,8 +526,10 @@ def _ci_get(data: dict[str, Any], *names: str, default: Any = None) -> Any:
 def _status_card(label: str, display_value: str, healthy: bool) -> None:
     css = "ok" if healthy else "bad"
     st.markdown(
-        f'<div class="status-card {css}"><div class="status-label">{html.escape(label)}</div>'
-        f'<div class="status-value {css}">{html.escape(display_value)}</div></div>',
+        f'<div class="status-card {css}">'
+        f'<div class="status-label">{html.escape(label)}</div>'
+        f'<div class="status-value {css}">{html.escape(display_value)}</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -351,8 +540,12 @@ def _normalise_group_rows(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
-def _group_frame(groups: list[dict[str, Any]], *, nested: bool) -> pd.DataFrame:
-    rows = []
+def _group_frame(
+    groups: list[dict[str, Any]],
+    *,
+    nested: bool,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
     for group in groups:
         row = {
             "Group": _ci_get(group, "Name") or "Unresolved group",
@@ -368,55 +561,77 @@ def _group_frame(groups: list[dict[str, Any]], *, nested: bool) -> pd.DataFrame:
         rows.append(row)
     return pd.DataFrame(rows)
 
+
 # ---------------------------------------------------------------------------
-# Result renderers
+# Business-facing result renderers
 # ---------------------------------------------------------------------------
 
 
 def render_script_execution(execution: Dict[str, Any]) -> None:
+    """Used only inside optional detail expanders."""
+
     show_table([
-        ("Success", execution.get("success")), ("Operation", execution.get("operation")),
-        ("Script", execution.get("script_name")), ("Exit code", execution.get("exit_code")),
-        ("Duration seconds", execution.get("duration_seconds")), ("Dry run", execution.get("dry_run")),
-        ("Standard output", execution.get("stdout")), ("Standard error", execution.get("stderr")),
+        ("Success", execution.get("success")),
+        ("Operation", execution.get("operation")),
+        ("Script", execution.get("script_name")),
+        ("Exit code", execution.get("exit_code")),
+        ("Duration seconds", execution.get("duration_seconds")),
+        ("Dry run", execution.get("dry_run")),
+        ("Standard output", execution.get("stdout")),
+        ("Standard error", execution.get("stderr")),
         ("Error", execution.get("error")),
     ], "Script execution")
-
-
-def render_guardrails(response: Dict[str, Any]) -> None:
-    show_table([
-        ("Action", response.get("guardrail_action")), ("Blocked", response.get("guardrail_blocked")),
-        ("Confirmation required", response.get("confirmation_required")),
-        ("Confirmation prompt", response.get("confirmation_prompt")),
-        ("Output filtered fields", response.get("guardrails_output_filtered")),
-    ], "Guardrails")
-    violations = response.get("guardrail_violations")
-    if isinstance(violations, list):
-        for index, violation in enumerate(violations, 1):
-            if isinstance(violation, dict):
-                show_table(flatten_rows(violation), f"Guardrail violation {index}")
 
 
 def render_password_actions(token: str, manager_email: str) -> None:
     status_key = f"email_status_{token}"
     st.session_state.setdefault(status_key, None)
-    can_email = bool(manager_email) and manager_email != "Not Available" and email_is_configured()
+    can_email = (
+        bool(manager_email)
+        and manager_email != "Not Available"
+        and email_is_configured()
+    )
     left, right = st.columns(2)
-    if left.button("Send Email To Manager", key=f"send_{token}", disabled=not can_email, width="stretch"):
+    if left.button(
+        "Send Email To Manager",
+        key=f"send_{token}",
+        disabled=not can_email,
+        width="stretch",
+    ):
         with st.spinner("Sending email..."):
             sent, message, recipient = send_password_to_manager(token)
-        st.session_state[status_key] = {"sent": sent, "message": message, "recipient": recipient}
+        st.session_state[status_key] = {
+            "sent": sent,
+            "message": message,
+            "recipient": recipient,
+        }
+
     ok, filename, content, message = build_password_download(token)
     if ok:
-        right.download_button("Download Password TXT", data=content, file_name=filename, mime="text/plain", key=f"dl_{token}", width="stretch")
+        right.download_button(
+            "Download Password TXT",
+            data=content,
+            file_name=filename,
+            mime="text/plain",
+            key=f"dl_{token}",
+            width="stretch",
+        )
     else:
-        right.button("Download Password TXT", key=f"dl_disabled_{token}", disabled=True, width="stretch")
+        right.button(
+            "Download Password TXT",
+            key=f"dl_disabled_{token}",
+            disabled=True,
+            width="stretch",
+        )
         st.caption(message)
+
     status = st.session_state.get(status_key)
     if status is None:
         st.caption("Email status: Not Sent")
     elif status["sent"]:
-        st.success(f"Email status: Sent Successfully to {status['recipient']}")
+        st.success(
+            f"Email status: Sent Successfully to {status['recipient']}"
+        )
     else:
         st.error(f"Email status: Failed. {status['message']}")
 
@@ -426,27 +641,41 @@ def render_password_reset_actions(result: Dict[str, Any]) -> None:
     manager_name = result.get("manager_name") or "Not Available"
     manager_email = result.get("manager_email") or "Not Available"
     show_table([
-        ("Username", result.get("user_name") or result.get("user_principal_name")),
+        (
+            "Username",
+            result.get("user_name") or result.get("user_principal_name"),
+        ),
         ("Employee name", result.get("employee_name")),
-        ("Temporary password", result.get("masked_password") or "Not Available"),
-        ("Manager", manager_name), ("Manager email", manager_email), ("Backend", result.get("backend")),
-    ], "Result")
-    if isinstance(result.get("execution"), dict):
-        render_script_execution(result["execution"])
+        (
+            "Temporary password",
+            result.get("masked_password") or "Not Available",
+        ),
+        ("Manager", manager_name),
+        ("Manager email", manager_email),
+        ("Backend", result.get("backend")),
+    ], "Password reset result")
+
     token = result.get("password_token")
     if not token:
-        st.warning("The password is no longer retrievable for this reset. Run the reset again.")
+        st.warning(
+            "The password is no longer retrievable for this reset. "
+            "Run the reset again."
+        )
         return
     render_password_actions(token, manager_email)
 
 
-def render_user_details(user: dict[str, Any], backend: Any = None) -> None:
-    """Render only approved user fields and group memberships in the main UI."""
+def render_user_details(
+    user: dict[str, Any],
+    backend: Any = None,
+) -> None:
+    """Render only approved fields plus direct and nested memberships."""
+
     st.markdown("### User details")
     if backend:
         st.caption(f"Backend: {backend}")
 
-    identity_rows = [
+    show_table([
         ("Name", _ci_get(user, "Name")),
         ("Display name", _ci_get(user, "DisplayName")),
         ("SAM account name", _ci_get(user, "SamAccountName")),
@@ -455,23 +684,42 @@ def render_user_details(user: dict[str, Any], backend: Any = None) -> None:
         ("Mobile phone", _ci_get(user, "MobilePhone")),
         ("Description", _ci_get(user, "Description")),
         ("Department", _ci_get(user, "Department")),
-    ]
-    show_table(identity_rows, "Identity and contact")
+    ], "Identity and contact")
 
     enabled = bool(_ci_get(user, "Enabled", default=False))
     locked = bool(_ci_get(user, "LockedOut", default=False))
-    password_expired = bool(_ci_get(user, "PasswordExpired", default=False))
-    password_never_expires = bool(_ci_get(user, "PasswordNeverExpires", default=False))
+    password_expired = bool(
+        _ci_get(user, "PasswordExpired", default=False)
+    )
+    password_never_expires = bool(
+        _ci_get(user, "PasswordNeverExpires", default=False)
+    )
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        _status_card("Enabled", "Enabled" if enabled else "Disabled", enabled)
+        _status_card(
+            "Enabled",
+            "Enabled" if enabled else "Disabled",
+            enabled,
+        )
     with col2:
-        _status_card("Locked out", "Locked" if locked else "Not locked", not locked)
+        _status_card(
+            "Locked out",
+            "Locked" if locked else "Not locked",
+            not locked,
+        )
     with col3:
-        _status_card("Password expired", "Yes" if password_expired else "No", not password_expired)
+        _status_card(
+            "Password expired",
+            "Yes" if password_expired else "No",
+            not password_expired,
+        )
     with col4:
-        _status_card("Password never expires", "Yes" if password_never_expires else "No", not password_never_expires)
+        _status_card(
+            "Password never expires",
+            "Yes" if password_never_expires else "No",
+            not password_never_expires,
+        )
 
     show_table([
         ("Password last set", _ci_get(user, "PasswordLastSet")),
@@ -479,13 +727,23 @@ def render_user_details(user: dict[str, Any], backend: Any = None) -> None:
         ("Distinguished name", _ci_get(user, "DistinguishedName")),
         ("Canonical name", _ci_get(user, "CanonicalName")),
         ("When created", _ci_get(user, "WhenCreated")),
-        ("Manager name", _ci_get(user, "ManagerName", "ManagerDisplayName")),
-        ("Manager email", _ci_get(user, "ManagerEmail", "ManagerMail")),
+        (
+            "Manager name",
+            _ci_get(user, "ManagerName", "ManagerDisplayName"),
+        ),
+        (
+            "Manager email",
+            _ci_get(user, "ManagerEmail", "ManagerMail"),
+        ),
     ], "Account and manager")
 
     primary_name = _ci_get(user, "PrimaryGroupName")
-    direct_groups = _normalise_group_rows(_ci_get(user, "DirectGroups", default=[]))
-    nested_groups = _normalise_group_rows(_ci_get(user, "NestedGroups", default=[]))
+    direct_groups = _normalise_group_rows(
+        _ci_get(user, "DirectGroups", default=[])
+    )
+    nested_groups = _normalise_group_rows(
+        _ci_get(user, "NestedGroups", default=[])
+    )
 
     st.markdown("### Group memberships")
     m1, m2, m3 = st.columns(3)
@@ -496,14 +754,45 @@ def render_user_details(user: dict[str, Any], backend: Any = None) -> None:
     direct_tab, nested_tab = st.tabs(["Direct groups", "Nested groups"])
     with direct_tab:
         if direct_groups:
-            st.dataframe(_group_frame(direct_groups, nested=False), hide_index=True, width="stretch")
+            st.dataframe(
+                _group_frame(direct_groups, nested=False),
+                hide_index=True,
+                width="stretch",
+            )
         else:
             st.info("No direct group memberships were returned.")
+
     with nested_tab:
         if nested_groups:
-            st.dataframe(_group_frame(nested_groups, nested=True), hide_index=True, width="stretch")
+            st.dataframe(
+                _group_frame(nested_groups, nested=True),
+                hide_index=True,
+                width="stretch",
+            )
         else:
             st.info("No nested parent group memberships were returned.")
+
+
+def render_generic_result(result: Dict[str, Any]) -> None:
+    """Render a concise business result for non-specialized operations."""
+
+    execution = result.get("execution")
+    user_record = result.get("user")
+    excluded = {
+        "execution", "user", "new_password", "temporary_password",
+        "_transient_password", "report", "report_markdown",
+    }
+
+    if isinstance(user_record, dict):
+        rows = [("Backend", result.get("backend"))]
+        rows.extend(flatten_rows(user_record))
+    else:
+        rows = flatten_rows(result, excluded)
+    show_table(rows, "Result")
+
+    if isinstance(execution, dict):
+        with st.expander("Execution details", expanded=False):
+            render_script_execution(execution)
 
 
 def render_result(intent: str, result: Dict[str, Any]) -> None:
@@ -511,43 +800,41 @@ def render_result(intent: str, result: Dict[str, Any]) -> None:
         report = result.get("report")
         if isinstance(report, dict):
             render_investigation_report(report)
-            return
-        st.warning("The investigation completed without a structured report payload.")
+        else:
+            st.warning(
+                "The investigation completed without a structured report payload."
+            )
         return
 
     if intent == "password_reset" and result.get("password_token"):
         render_password_reset_actions(result)
         return
 
-    execution = result.get("execution")
-    user_record = result.get("user")
-
     if intent == "get_user_details":
+        user_record = result.get("user")
         if isinstance(user_record, dict):
             render_user_details(user_record, result.get("backend"))
         else:
-            # Some script adapters return the user fields at result root.
             render_user_details(result, result.get("backend"))
-        if isinstance(execution, dict):
-            with st.expander("Script execution details", expanded=False):
-                render_script_execution(execution)
         return
 
-    excluded = {"execution", "user", "new_password", "temporary_password", "_transient_password", "report", "report_markdown"}
-    if isinstance(user_record, dict):
-        rows = [("Backend", result.get("backend"))]
-        rows.extend(flatten_rows(user_record))
-    else:
-        rows = flatten_rows(result, excluded)
-    show_table(rows, "Result")
-    if isinstance(execution, dict):
-        render_script_execution(execution)
+    render_generic_result(result)
 
 
 def render_operation_summary(response: Dict[str, Any]) -> None:
     intent = str(response.get("intent") or "Identity operation")
-    metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
-    target = metadata.get("email") or metadata.get("username") or metadata.get("user_id") or "Unknown target"
+    metadata = (
+        response.get("metadata")
+        if isinstance(response.get("metadata"), dict)
+        else {}
+    )
+    target = (
+        metadata.get("email")
+        or metadata.get("username")
+        or metadata.get("user_id")
+        or "Unknown target"
+    )
+
     if response.get("confirmation_required"):
         status, css = "Confirmation required", "warning"
     elif response.get("success") is True:
@@ -556,68 +843,96 @@ def render_operation_summary(response: Dict[str, Any]) -> None:
         status, css = "Failed", "failure"
     else:
         status, css = "Submitted", ""
+
     st.markdown(
-        f'<div class="operation-card {css}"><div class="operation-label">Current operation</div>'
-        f'<div class="operation-title">{html.escape(intent.replace("_", " ").title())}</div>'
-        f'<div class="operation-meta"><strong>Target:</strong> {html.escape(str(target))} &nbsp; | &nbsp; '
+        f'<div class="operation-card {css}">'
+        '<div class="operation-label">Current operation</div>'
+        f'<div class="operation-title">'
+        f'{html.escape(intent.replace("_", " ").title())}'
+        '</div>'
+        f'<div class="operation-meta"><strong>Target:</strong> '
+        f'{html.escape(str(target))} &nbsp; | &nbsp; '
         f'<strong>Status:</strong> {html.escape(status)}</div></div>',
         unsafe_allow_html=True,
     )
 
 
 def render_response(response: Dict[str, Any]) -> None:
+    """Render only business results; keep technical data in raw JSON."""
+
     render_operation_summary(response)
-    confidence = response.get("confidence")
-    show_table([
-        ("Succeeded", response.get("success")), ("Intent", response.get("intent")),
-        ("Confidence", f"{confidence:.0%}" if isinstance(confidence, (int, float)) else None),
-        ("Request ID", response.get("request_id")), ("Correlation ID", response.get("correlation_id")),
-        ("Explanation", response.get("explanation")), ("Message", response.get("message")),
-        ("Error", response.get("error")),
-    ], "Summary")
-    metadata = response.get("metadata")
-    if isinstance(metadata, dict):
-        show_table(flatten_rows(metadata, SENSITIVE_HISTORY_KEYS), "Extracted metadata")
-    render_guardrails(response)
-    show_table([
-        ("Agent", response.get("selected_agent")), ("MCP server", response.get("selected_mcp_server")),
-        ("MCP tool", response.get("selected_mcp_tool")), ("Application tool", response.get("selected_tool")),
-    ], "Routing")
-    if isinstance(response.get("orchestration"), dict):
-        show_table(flatten_rows(response["orchestration"]), "Orchestration")
-    if isinstance(response.get("execution_context"), dict):
-        show_table(flatten_rows(response["execution_context"]), "Execution context")
+    intent = str(response.get("intent") or "")
     tool_result = response.get("tool_result")
-    if isinstance(tool_result, dict) and tool_result:
-        show_table([
-            ("Tool name", tool_result.get("tool_name")), ("Status", tool_result.get("status")),
-            ("Operation ID", tool_result.get("operation_id")), ("Succeeded", tool_result.get("success")),
-            ("Message", tool_result.get("message")), ("Error", tool_result.get("error")),
-            ("API integration pending", tool_result.get("api_integration_pending")),
-        ], "Tool execution")
-        if isinstance(tool_result.get("result"), dict):
-            render_result(response.get("intent") or "", tool_result["result"])
-    label = "Technical investigation details" if response.get("intent") == "failed_login_investigation" else "Raw response (JSON)"
-    with st.expander(label, expanded=False):
-        st.json(redact_sensitive_history(copy.deepcopy(response)))
+
+    if isinstance(tool_result, dict):
+        result = tool_result.get("result")
+        if isinstance(result, dict):
+            render_result(intent, result)
+        elif response.get("success") is False:
+            st.error(
+                response.get("error")
+                or response.get("message")
+                or "The operation failed."
+            )
+        elif response.get("message"):
+            st.info(response["message"])
+    elif response.get("confirmation_required"):
+        st.info(
+            response.get("confirmation_prompt")
+            or "Approval is required before this operation can continue."
+        )
+    elif response.get("clarification_required"):
+        st.warning(
+            response.get("clarification_question")
+            or response.get("message")
+            or "More information is required."
+        )
+    elif response.get("success") is False:
+        st.error(
+            response.get("error")
+            or response.get("message")
+            or "The operation failed."
+        )
+    elif response.get("message"):
+        st.info(response["message"])
+
+    # All technical information is retained here instead of being displayed
+    # as separate Summary, Metadata, Guardrails, Routing, Orchestration,
+    # Execution Context, or Tool Execution sections.
+    with st.expander("Raw response (JSON)", expanded=False):
+        st.json(
+            redact_sensitive_history(
+                copy.deepcopy(response)
+            )
+        )
+
 
 # ---------------------------------------------------------------------------
-# Workflow, confirmation, sidebar, main
+# Confirmation and conversation workflow
 # ---------------------------------------------------------------------------
 
 
-def set_pending_confirmation(response: Dict[str, Any], query: str) -> None:
+def set_pending_confirmation(
+    response: Dict[str, Any],
+    query: str,
+) -> None:
     if response.get("confirmation_required"):
         st.session_state.pending_confirmation = {
-            "query": query, "request_id": response.get("request_id"),
-            "correlation_id": response.get("correlation_id"), "intent": response.get("intent"),
+            "query": query,
+            "request_id": response.get("request_id"),
+            "correlation_id": response.get("correlation_id"),
+            "intent": response.get("intent"),
             "prompt": response.get("confirmation_prompt"),
         }
     else:
         st.session_state.pending_confirmation = None
 
 
-def append_conversation(role: str, content: Any, timestamp: str) -> None:
+def append_conversation(
+    role: str,
+    content: Any,
+    timestamp: str,
+) -> None:
     st.session_state.conversation.append({
         "role": role,
         "content": redact_sensitive_history(copy.deepcopy(content)),
@@ -625,15 +940,27 @@ def append_conversation(role: str, content: Any, timestamp: str) -> None:
     })
 
 
-def execute_and_render(query: str, *, confirmed: bool = False, request_id: str | None = None,
-                       correlation_id: str | None = None, add_user_turn: bool = True) -> Dict[str, Any]:
+def execute_and_render(
+    query: str,
+    *,
+    confirmed: bool = False,
+    request_id: str | None = None,
+    correlation_id: str | None = None,
+    add_user_turn: bool = True,
+) -> Dict[str, Any]:
     timestamp = datetime.now().strftime("%H:%M:%S")
     access = st.session_state.get("app_user_access")
-    requester_id = access.get("user_id") if isinstance(access, dict) else None
+    requester_id = (
+        access.get("user_id")
+        if isinstance(access, dict)
+        else None
+    )
+
     if add_user_turn:
         with st.chat_message("user"):
             st.write(query)
         append_conversation("user", query, timestamp)
+
     with st.chat_message("assistant"):
         with st.spinner("Checking and running the operation..."):
             response = get_service().run_query(
@@ -645,6 +972,7 @@ def execute_and_render(query: str, *, confirmed: bool = False, request_id: str |
             )
         register_dashboard_secret(response)
         render_response(response)
+
     append_conversation("assistant", response, timestamp)
     set_pending_confirmation(response, query)
     return response
@@ -654,13 +982,31 @@ def cancel_pending_confirmation() -> None:
     pending = st.session_state.pending_confirmation
     st.session_state.pending_confirmation = None
     response = {
-        "success": False, "cancelled": True,
-        "request_id": pending.get("request_id") if isinstance(pending, dict) else None,
-        "correlation_id": pending.get("correlation_id") if isinstance(pending, dict) else None,
-        "intent": pending.get("intent") if isinstance(pending, dict) else None,
-        "message": "Operation cancelled. No changes were made.", "error": None,
+        "success": False,
+        "cancelled": True,
+        "request_id": (
+            pending.get("request_id")
+            if isinstance(pending, dict)
+            else None
+        ),
+        "correlation_id": (
+            pending.get("correlation_id")
+            if isinstance(pending, dict)
+            else None
+        ),
+        "intent": (
+            pending.get("intent")
+            if isinstance(pending, dict)
+            else None
+        ),
+        "message": "Operation cancelled. No changes were made.",
+        "error": None,
     }
-    append_conversation("assistant", response, datetime.now().strftime("%H:%M:%S"))
+    append_conversation(
+        "assistant",
+        response,
+        datetime.now().strftime("%H:%M:%S"),
+    )
     st.rerun()
 
 
@@ -668,15 +1014,25 @@ def render_confirmation_controls() -> None:
     pending = st.session_state.pending_confirmation
     if not isinstance(pending, dict):
         return
+
     with st.container(border=True):
         st.markdown("**Approval required**")
-        st.write(pending.get("prompt") or "Confirm this operation before continuing.")
+        st.write(
+            pending.get("prompt")
+            or "Confirm this operation before continuing."
+        )
         left, right = st.columns(2)
-        if left.button("Confirm and proceed", type="primary", width="stretch"):
+        if left.button(
+            "Confirm and proceed",
+            type="primary",
+            width="stretch",
+        ):
             st.session_state.pending_confirmation = None
             execute_and_render(
-                pending["query"], confirmed=True,
-                request_id=pending.get("request_id"), correlation_id=pending.get("correlation_id"),
+                pending["query"],
+                confirmed=True,
+                request_id=pending.get("request_id"),
+                correlation_id=pending.get("correlation_id"),
                 add_user_turn=False,
             )
             st.rerun()
@@ -684,14 +1040,31 @@ def render_confirmation_controls() -> None:
             cancel_pending_confirmation()
 
 
+# ---------------------------------------------------------------------------
+# Sidebar and application shell
+# ---------------------------------------------------------------------------
+
+
 def safe_conversation_download() -> str:
-    return json.dumps(redact_sensitive_history(copy.deepcopy(st.session_state.conversation)), indent=2, ensure_ascii=False, default=str)
+    return json.dumps(
+        redact_sensitive_history(
+            copy.deepcopy(st.session_state.conversation)
+        ),
+        indent=2,
+        ensure_ascii=False,
+        default=str,
+    )
 
 
 def render_sidebar() -> None:
     with st.sidebar:
         access = st.session_state.get("app_user_access")
-        user_id = access.get("user_id") if isinstance(access, dict) else None
+        user_id = (
+            access.get("user_id")
+            if isinstance(access, dict)
+            else None
+        )
+
         if user_id:
             st.subheader("Your recent requests")
             history = get_user_request_history(user_id)
@@ -700,34 +1073,91 @@ def render_sidebar() -> None:
                     requested_at = item.get("requested_at")
                     if isinstance(requested_at, datetime):
                         requested_at = requested_at.strftime("%b %d, %H:%M")
-                    st.caption((item["request"].strip() or item["operation"])[:120])
-                    st.caption(f"{item['status'].title()} | {requested_at or 'Unknown time'}")
+                    label = item["request"].strip() or item["operation"]
+                    st.caption(label[:120])
+                    st.caption(
+                        f"{item['status'].title()} | "
+                        f"{requested_at or 'Unknown time'}"
+                    )
             else:
                 st.caption("No requests recorded yet.")
             st.divider()
+
         status = get_config_status()
         with st.expander("System status"):
             show_table([
-                ("Microsoft Graph", "Configured" if status.get("graph_client_id") and status.get("graph_client_secret") and status.get("graph_tenant_id") else "Incomplete"),
-                ("PowerShell", "Enabled" if status.get("powershell_operations_enabled") else "Disabled"),
-                ("Destructive actions", "Enabled" if status.get("destructive_operations_enabled") else "Disabled"),
-                ("LangGraph", "Active" if status.get("orchestration_engine") == "langgraph" else "Unavailable"),
-                ("Operation audit", "Enabled" if status.get("operation_audit_enabled") else "Unknown"),
-                ("Configuration", "Valid" if status.get("config_valid") else "Invalid"),
+                (
+                    "Microsoft Graph",
+                    "Configured"
+                    if status.get("graph_client_id")
+                    and status.get("graph_client_secret")
+                    and status.get("graph_tenant_id")
+                    else "Incomplete",
+                ),
+                (
+                    "PowerShell",
+                    "Enabled"
+                    if status.get("powershell_operations_enabled")
+                    else "Disabled",
+                ),
+                (
+                    "Destructive actions",
+                    "Enabled"
+                    if status.get("destructive_operations_enabled")
+                    else "Disabled",
+                ),
+                (
+                    "LangGraph",
+                    "Active"
+                    if status.get("orchestration_engine") == "langgraph"
+                    else "Unavailable",
+                ),
+                (
+                    "Operation audit",
+                    "Enabled"
+                    if status.get("operation_audit_enabled")
+                    else "Unknown",
+                ),
+                (
+                    "Configuration",
+                    "Valid" if status.get("config_valid") else "Invalid",
+                ),
             ])
+
             if st.button("Test Ollama connection", width="stretch"):
                 connected, message = check_ollama()
-                st.session_state.ollama_check_result = {"connected": connected, "message": message}
+                st.session_state.ollama_check_result = {
+                    "connected": connected,
+                    "message": message,
+                }
             if isinstance(st.session_state.ollama_check_result, dict):
-                show_table(flatten_rows(st.session_state.ollama_check_result))
+                show_table(
+                    flatten_rows(st.session_state.ollama_check_result)
+                )
+
         with st.expander("Environment details"):
-            show_table(flatten_rows(status, {"graph_client_secret", "client_secret", "access_token"}))
+            show_table(
+                flatten_rows(
+                    status,
+                    {
+                        "graph_client_secret",
+                        "client_secret",
+                        "access_token",
+                    },
+                )
+            )
+
         st.divider()
         st.caption("Example queries")
         for index, example in enumerate(EXAMPLES):
-            if st.button(example, key=f"example_{index}", width="stretch"):
+            if st.button(
+                example,
+                key=f"example_{index}",
+                width="stretch",
+            ):
                 st.session_state.queued_query = example
                 st.rerun()
+
         st.divider()
         st.caption(f"Logs: {LOG_FILE}")
         if st.session_state.conversation:
@@ -735,68 +1165,128 @@ def render_sidebar() -> None:
                 st.session_state.conversation = []
                 st.session_state.pending_confirmation = None
                 st.rerun()
-            st.download_button("Download as JSON", data=safe_conversation_download(), file_name="techadmin_session.json", mime="application/json", width="stretch")
+            st.download_button(
+                "Download as JSON",
+                data=safe_conversation_download(),
+                file_name="techadmin_session.json",
+                mime="application/json",
+                width="stretch",
+            )
 
 
 def render_recent_operations() -> None:
-    operations = []
+    operations: list[dict[str, Any]] = []
     for turn in reversed(st.session_state.conversation):
-        if turn.get("role") != "assistant" or not isinstance(turn.get("content"), dict):
+        if (
+            turn.get("role") != "assistant"
+            or not isinstance(turn.get("content"), dict)
+        ):
             continue
+
         response = turn["content"]
-        metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
-        status = "Awaiting confirmation" if response.get("confirmation_required") else "Cancelled" if response.get("cancelled") else "Completed" if response.get("success") is True else "Failed"
+        metadata = (
+            response.get("metadata")
+            if isinstance(response.get("metadata"), dict)
+            else {}
+        )
+        if response.get("confirmation_required"):
+            status = "Awaiting confirmation"
+        elif response.get("cancelled"):
+            status = "Cancelled"
+        elif response.get("success") is True:
+            status = "Completed"
+        else:
+            status = "Failed"
+
         operations.append({
-            "Operation": str(response.get("intent") or "Identity operation").replace("_", " ").title(),
-            "Target": metadata.get("email") or metadata.get("username") or "Unknown target",
-            "Status": status, "Time": turn.get("time", ""),
+            "Operation": str(
+                response.get("intent") or "Identity operation"
+            ).replace("_", " ").title(),
+            "Target": (
+                metadata.get("email")
+                or metadata.get("username")
+                or "Unknown target"
+            ),
+            "Status": status,
+            "Time": turn.get("time", ""),
         })
         if len(operations) == 5:
             break
+
     if operations:
         st.markdown("#### Recent operations")
-        st.dataframe(pd.DataFrame(operations), hide_index=True, width="stretch")
+        st.dataframe(
+            pd.DataFrame(operations),
+            hide_index=True,
+            width="stretch",
+        )
 
 
 def render_command_center() -> None:
     if st.session_state.conversation:
         return
     st.markdown(
-        '<div class="tech-panel"><strong>What do you need to take care of?</strong>'
-        '<span>Ask for a user lookup, password reset, account unlock, access change, or failed-login/account-lockout investigation. Sensitive actions pause for confirmation.</span></div>',
+        '<div class="tech-panel">'
+        '<strong>What do you need to take care of?</strong>'
+        '<span>Ask for a user lookup, password reset, account unlock, '
+        'access change, or failed-login/account-lockout investigation. '
+        'Sensitive actions pause for confirmation.</span></div>',
         unsafe_allow_html=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
 def main() -> None:
     init_state()
     require_authentication()
     render_command_center()
+
     for turn in st.session_state.conversation:
         with st.chat_message(turn["role"]):
             if turn["role"] == "user":
                 st.write(turn["content"])
             elif isinstance(turn["content"], dict):
                 render_response(turn["content"])
-    query = st.session_state.queued_query or st.chat_input("Type an identity operation...")
+
+    query = (
+        st.session_state.queued_query
+        or st.chat_input("Type an identity operation...")
+    )
     st.session_state.queued_query = None
+
     if query:
         pending = st.session_state.pending_confirmation
         answer = query.strip().casefold().rstrip(".!")
+
         if isinstance(pending, dict) and answer in YES_WORDS:
-            append_conversation("user", query, datetime.now().strftime("%H:%M:%S"))
+            append_conversation(
+                "user",
+                query,
+                datetime.now().strftime("%H:%M:%S"),
+            )
             st.session_state.pending_confirmation = None
             execute_and_render(
-                pending["query"], confirmed=True,
-                request_id=pending.get("request_id"), correlation_id=pending.get("correlation_id"),
+                pending["query"],
+                confirmed=True,
+                request_id=pending.get("request_id"),
+                correlation_id=pending.get("correlation_id"),
                 add_user_turn=False,
             )
         elif isinstance(pending, dict) and answer in NO_WORDS:
-            append_conversation("user", query, datetime.now().strftime("%H:%M:%S"))
+            append_conversation(
+                "user",
+                query,
+                datetime.now().strftime("%H:%M:%S"),
+            )
             cancel_pending_confirmation()
         else:
             execute_and_render(query)
         st.rerun()
+
     render_confirmation_controls()
     render_recent_operations()
     render_sidebar()
