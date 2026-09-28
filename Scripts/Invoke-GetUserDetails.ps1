@@ -2,25 +2,29 @@
 
 <#
 .SYNOPSIS
-    Retrieves Active Directory user, lockout, manager, and group membership details.
+    Retrieves Active Directory user, lockout, manager, and group details.
 
 .DESCRIPTION
-    Resolves a user by UPN, SAM account name, distinguished name, GUID, or SID.
-    Queries the PDC emulator for current lockout information.
+    Resolves one Active Directory user by user principal name, SAM account
+    name, distinguished name, GUID, or SID.
 
-    Returns:
-      - User and account details
-      - Manager name, UPN, email, title, and department
-      - Direct group memberships
-      - Nested parent group memberships
-      - Primary group
-      - Unique effective group membership list
+    The script queries the domain PDC emulator for current account-lockout
+    information. It returns direct groups, recursively resolved nested parent
+    groups, the primary group, and a unique effective group list.
+
+    Users with no direct MemberOf values are handled successfully. Such users
+    can still have a primary group, commonly Domain Users.
 
 .PARAMETER UserIdentifier
     User principal name, SAM account name, distinguished name, GUID, or SID.
 
 .EXAMPLE
-    .\Invoke-GetUserDetails.ps1 -UserIdentifier "MigrationTest3@Coforge.com"
+    .\Invoke-GetUserDetails.ps1 `
+        -UserIdentifier "MigrationTest3@Coforge.com"
+
+.EXAMPLE
+    .\Invoke-GetUserDetails.ps1 `
+        -UserIdentifier "MigrationTest3"
 #>
 
 [CmdletBinding()]
@@ -32,6 +36,7 @@ param (
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
 
 function ConvertTo-LdapFilterValue {
     [CmdletBinding()]
@@ -45,8 +50,10 @@ function ConvertTo-LdapFilterValue {
     $escapedValue = $escapedValue.Replace('(', '\28')
     $escapedValue = $escapedValue.Replace(')', '\29')
     $escapedValue = $escapedValue.Replace([string][char]0, '\00')
+
     return $escapedValue
 }
+
 
 function ConvertFrom-FileTimeValue {
     [CmdletBinding()]
@@ -62,15 +69,18 @@ function ConvertFrom-FileTimeValue {
 
     try {
         $fileTime = [int64]$Value
+
         if ($fileTime -le 0) {
             return $null
         }
+
         return [DateTime]::FromFileTimeUtc($fileTime).ToLocalTime()
     }
     catch {
         return $null
     }
 }
+
 
 function ConvertTo-IsoDateTime {
     [CmdletBinding()]
@@ -91,6 +101,33 @@ function ConvertTo-IsoDateTime {
         return [string]$Value
     }
 }
+
+
+function Get-ObjectPropertyValue {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [object]$InputObject,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$PropertyName
+    )
+
+    if ($null -eq $InputObject) {
+        return $null
+    }
+
+    $property = $InputObject.PSObject.Properties[$PropertyName]
+
+    if ($null -eq $property) {
+        return $null
+    }
+
+    return $property.Value
+}
+
 
 function New-GroupRecord {
     [CmdletBinding()]
@@ -114,13 +151,39 @@ function New-GroupRecord {
         [string]$ResolutionError
     )
 
+    $groupCategory = Get-ObjectPropertyValue `
+        -InputObject $Group `
+        -PropertyName "GroupCategory"
+
+    $groupScope = Get-ObjectPropertyValue `
+        -InputObject $Group `
+        -PropertyName "GroupScope"
+
     return [PSCustomObject][ordered]@{
-        Name = $Group.Name
-        SamAccountName = $Group.SamAccountName
-        DistinguishedName = $Group.DistinguishedName
-        GroupCategory = if ($null -ne $Group.GroupCategory) { [string]$Group.GroupCategory } else { $null }
-        GroupScope = if ($null -ne $Group.GroupScope) { [string]$Group.GroupScope } else { $null }
-        Description = $Group.Description
+        Name = Get-ObjectPropertyValue `
+            -InputObject $Group `
+            -PropertyName "Name"
+        SamAccountName = Get-ObjectPropertyValue `
+            -InputObject $Group `
+            -PropertyName "SamAccountName"
+        DistinguishedName = Get-ObjectPropertyValue `
+            -InputObject $Group `
+            -PropertyName "DistinguishedName"
+        GroupCategory = if ($null -ne $groupCategory) {
+            [string]$groupCategory
+        }
+        else {
+            $null
+        }
+        GroupScope = if ($null -ne $groupScope) {
+            [string]$groupScope
+        }
+        else {
+            $null
+        }
+        Description = Get-ObjectPropertyValue `
+            -InputObject $Group `
+            -PropertyName "Description"
         MembershipType = $MembershipType
         NestingLevel = $NestingLevel
         InheritedFrom = $InheritedFrom
@@ -128,18 +191,25 @@ function New-GroupRecord {
     }
 }
 
+
 function Get-DirectGroups {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $false)]
         [AllowNull()]
-        [object[]]$MemberOf,
+        [AllowEmptyCollection()]
+        [object[]]$MemberOf = @(),
 
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$Server
     )
 
     $results = @()
+
+    if ($null -eq $MemberOf -or @($MemberOf).Count -eq 0) {
+        return @()
+    }
 
     foreach ($groupDn in @($MemberOf)) {
         if ([string]::IsNullOrWhiteSpace([string]$groupDn)) {
@@ -169,16 +239,23 @@ function Get-DirectGroups {
         }
     }
 
-    return @($results | Sort-Object Name, DistinguishedName)
+    return @(
+        $results |
+        Sort-Object Name, DistinguishedName
+    )
 }
+
 
 function Get-NestedGroups {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory = $true)]
-        [object[]]$DirectGroups,
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object[]]$DirectGroups = @(),
 
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$Server
     )
 
@@ -186,22 +263,49 @@ function Get-NestedGroups {
     $visited = @{}
     $queue = New-Object System.Collections.Queue
 
+    if ($null -eq $DirectGroups -or @($DirectGroups).Count -eq 0) {
+        return @()
+    }
+
     foreach ($directGroup in @($DirectGroups)) {
-        $directDn = [string]$directGroup.DistinguishedName
+        if ($null -eq $directGroup) {
+            continue
+        }
+
+        $directDn = [string](
+            Get-ObjectPropertyValue `
+                -InputObject $directGroup `
+                -PropertyName "DistinguishedName"
+        )
+
         if (-not [string]::IsNullOrWhiteSpace($directDn)) {
             $visited[$directDn.ToLowerInvariant()] = $true
         }
 
-        foreach ($parentDn in @($directGroup.MemberOf)) {
+        $directName = [string](
+            Get-ObjectPropertyValue `
+                -InputObject $directGroup `
+                -PropertyName "Name"
+        )
+
+        $parentGroups = @(
+            Get-ObjectPropertyValue `
+                -InputObject $directGroup `
+                -PropertyName "MemberOf"
+        )
+
+        foreach ($parentDn in $parentGroups) {
             if ([string]::IsNullOrWhiteSpace([string]$parentDn)) {
                 continue
             }
 
-            $queue.Enqueue([PSCustomObject]@{
-                DistinguishedName = [string]$parentDn
-                InheritedFrom = [string]$directGroup.Name
-                Level = 1
-            })
+            $queue.Enqueue(
+                [PSCustomObject]@{
+                    DistinguishedName = [string]$parentDn
+                    InheritedFrom = $directName
+                    Level = 1
+                }
+            )
         }
     }
 
@@ -214,9 +318,11 @@ function Get-NestedGroups {
         }
 
         $visitedKey = $groupDn.ToLowerInvariant()
+
         if ($visited.ContainsKey($visitedKey)) {
             continue
         }
+
         $visited[$visitedKey] = $true
 
         try {
@@ -238,12 +344,15 @@ function Get-NestedGroups {
                 }
 
                 $parentKey = ([string]$parentDn).ToLowerInvariant()
+
                 if (-not $visited.ContainsKey($parentKey)) {
-                    $queue.Enqueue([PSCustomObject]@{
-                        DistinguishedName = [string]$parentDn
-                        InheritedFrom = [string]$group.Name
-                        Level = ([int]$item.Level + 1)
-                    })
+                    $queue.Enqueue(
+                        [PSCustomObject]@{
+                            DistinguishedName = [string]$parentDn
+                            InheritedFrom = [string]$group.Name
+                            Level = ([int]$item.Level + 1)
+                        }
+                    )
                 }
             }
         }
@@ -266,8 +375,12 @@ function Get-NestedGroups {
         }
     }
 
-    return @($results | Sort-Object NestingLevel, Name, DistinguishedName)
+    return @(
+        $results |
+        Sort-Object NestingLevel, Name, DistinguishedName
+    )
 }
+
 
 function Get-PrimaryGroup {
     [CmdletBinding()]
@@ -276,6 +389,7 @@ function Get-PrimaryGroup {
         [object]$User,
 
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$Server
     )
 
@@ -286,6 +400,7 @@ function Get-PrimaryGroup {
 
         $sidText = [string]$User.ObjectSID.Value
         $lastDash = $sidText.LastIndexOf('-')
+
         if ($lastDash -lt 1) {
             return $null
         }
@@ -304,6 +419,7 @@ function Get-PrimaryGroup {
     }
 }
 
+
 function Get-ManagerDetails {
     [CmdletBinding()]
     param (
@@ -312,10 +428,16 @@ function Get-ManagerDetails {
         [object]$ManagerDistinguishedName,
 
         [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
         [string]$Server
     )
 
-    if ($null -eq $ManagerDistinguishedName -or [string]::IsNullOrWhiteSpace([string]$ManagerDistinguishedName)) {
+    if (
+        $null -eq $ManagerDistinguishedName `
+        -or [string]::IsNullOrWhiteSpace(
+            [string]$ManagerDistinguishedName
+        )
+    ) {
         return [PSCustomObject][ordered]@{
             Assigned = $false
             Name = $null
@@ -338,13 +460,19 @@ function Get-ManagerDetails {
             -Properties DisplayName, SamAccountName, UserPrincipalName, Mail, Title, Department, Enabled `
             -ErrorAction Stop
 
+        $managerEmail = $manager.Mail
+
+        if ([string]::IsNullOrWhiteSpace([string]$managerEmail)) {
+            $managerEmail = $manager.UserPrincipalName
+        }
+
         return [PSCustomObject][ordered]@{
             Assigned = $true
             Name = $manager.Name
             DisplayName = $manager.DisplayName
             SamAccountName = $manager.SamAccountName
             UserPrincipalName = $manager.UserPrincipalName
-            Email = $manager.Mail
+            Email = $managerEmail
             JobTitle = $manager.Title
             Department = $manager.Department
             DistinguishedName = $manager.DistinguishedName
@@ -369,10 +497,13 @@ function Get-ManagerDetails {
     }
 }
 
+
 try {
     Import-Module ActiveDirectory -ErrorAction Stop
 
-    $executionIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $executionIdentity = (
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    )
     $executionComputer = $env:COMPUTERNAME
 
     $domain = Get-ADDomain -ErrorAction Stop
@@ -422,7 +553,9 @@ try {
     $user = $null
 
     if ($UserIdentifier -like "*@*") {
-        $safeIdentifier = ConvertTo-LdapFilterValue -Value $UserIdentifier
+        $safeIdentifier = ConvertTo-LdapFilterValue `
+            -Value $UserIdentifier
+
         $matchingUsers = @(
             Get-ADUser `
                 -LDAPFilter "(userPrincipalName=$safeIdentifier)" `
@@ -435,9 +568,11 @@ try {
         if ($matchingUsers.Count -eq 0) {
             throw "The Active Directory user '$UserIdentifier' was not found."
         }
+
         if ($matchingUsers.Count -gt 1) {
             throw "More than one Active Directory user matched '$UserIdentifier'."
         }
+
         $user = $matchingUsers[0]
     }
     else {
@@ -459,10 +594,16 @@ try {
         -ErrorAction Stop
 
     $isLockedOut = [bool]$lockoutUser.LockedOut
-    $lockoutTime = ConvertFrom-FileTimeValue -Value $lockoutUser.lockoutTime
-    $lastBadPasswordTime = ConvertFrom-FileTimeValue -Value $lockoutUser.badPasswordTime
+    $lockoutTime = ConvertFrom-FileTimeValue `
+        -Value $lockoutUser.lockoutTime
+    $lastBadPasswordTime = ConvertFrom-FileTimeValue `
+        -Value $lockoutUser.badPasswordTime
 
-    $searchBase = $user.DistinguishedName -replace '^CN=(?:\\.|[^,])+,', ''
+    $searchBase = (
+        $user.DistinguishedName `
+        -replace '^CN=(?:\\.|[^,])+,', ''
+    )
+
     $lockedAccountMatch = @(
         Search-ADAccount `
             -LockedOut `
@@ -470,7 +611,9 @@ try {
             -SearchBase $searchBase `
             -Server $pdcEmulator `
             -ErrorAction Stop |
-        Where-Object { $_.ObjectGUID -eq $user.ObjectGUID } |
+        Where-Object {
+            $_.ObjectGUID -eq $user.ObjectGUID
+        } |
         Select-Object -First 1
     )
 
@@ -482,10 +625,19 @@ try {
         -Server $pdcEmulator
 
     $resolvedManagerName = $null
-    if (-not [string]::IsNullOrWhiteSpace([string]$managerDetails.DisplayName)) {
+
+    if (
+        -not [string]::IsNullOrWhiteSpace(
+            [string]$managerDetails.DisplayName
+        )
+    ) {
         $resolvedManagerName = $managerDetails.DisplayName
     }
-    elseif (-not [string]::IsNullOrWhiteSpace([string]$managerDetails.Name)) {
+    elseif (
+        -not [string]::IsNullOrWhiteSpace(
+            [string]$managerDetails.Name
+        )
+    ) {
         $resolvedManagerName = $managerDetails.Name
     }
 
@@ -496,11 +648,15 @@ try {
     )
 
     $directGroups = @()
-    foreach ($group in $directGroupObjects) {
-        $resolutionError = $null
-        if ($null -ne $group.PSObject.Properties["ResolutionError"]) {
-            $resolutionError = $group.ResolutionError
+
+    foreach ($group in @($directGroupObjects)) {
+        if ($null -eq $group) {
+            continue
         }
+
+        $resolutionError = Get-ObjectPropertyValue `
+            -InputObject $group `
+            -PropertyName "ResolutionError"
 
         $directGroups += New-GroupRecord `
             -Group $group `
@@ -510,17 +666,22 @@ try {
             -ResolutionError $resolutionError
     }
 
-    $nestedGroups = @(
-        Get-NestedGroups `
-            -DirectGroups $directGroupObjects `
-            -Server $pdcEmulator
-    )
+    $nestedGroups = @()
+
+    if (@($directGroupObjects).Count -gt 0) {
+        $nestedGroups = @(
+            Get-NestedGroups `
+                -DirectGroups @($directGroupObjects) `
+                -Server $pdcEmulator
+        )
+    }
 
     $primaryGroupObject = Get-PrimaryGroup `
         -User $user `
         -Server $pdcEmulator
 
     $primaryGroups = @()
+
     if ($null -ne $primaryGroupObject) {
         $primaryGroups += New-GroupRecord `
             -Group $primaryGroupObject `
@@ -529,46 +690,71 @@ try {
             -NestingLevel 0
     }
 
-    $effectiveGroupsByDn = @{}
-    foreach ($group in @($primaryGroups) + @($directGroups) + @($nestedGroups)) {
+    $effectiveGroupsByKey = @{}
+
+    foreach (
+        $group in @($primaryGroups) + @($directGroups) + @($nestedGroups)
+    ) {
+        if ($null -eq $group) {
+            continue
+        }
+
         $key = [string]$group.DistinguishedName
+
         if ([string]::IsNullOrWhiteSpace($key)) {
-            $key = "$($group.MembershipType)::$($group.Name)::$($group.InheritedFrom)"
+            $key = (
+                "$($group.MembershipType)::$($group.Name)" +
+                "::$($group.InheritedFrom)"
+            )
         }
 
         $normalizedKey = $key.ToLowerInvariant()
-        if (-not $effectiveGroupsByDn.ContainsKey($normalizedKey)) {
-            $effectiveGroupsByDn[$normalizedKey] = $group
+
+        if (-not $effectiveGroupsByKey.ContainsKey($normalizedKey)) {
+            $effectiveGroupsByKey[$normalizedKey] = $group
         }
     }
 
     $effectiveGroups = @(
-        $effectiveGroupsByDn.Values |
+        $effectiveGroupsByKey.Values |
         Sort-Object Name, DistinguishedName
     )
 
     $directGroupNames = @(
         $directGroups |
-        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Name) } |
-        ForEach-Object { $_.Name } |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_.Name)
+        } |
+        ForEach-Object {
+            $_.Name
+        } |
         Sort-Object -Unique
     )
 
     $nestedGroupNames = @(
         $nestedGroups |
-        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Name) } |
-        ForEach-Object { $_.Name } |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_.Name)
+        } |
+        ForEach-Object {
+            $_.Name
+        } |
         Sort-Object -Unique
     )
 
     $effectiveGroupNames = @(
         $effectiveGroups |
-        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Name) } |
-        ForEach-Object { $_.Name } |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_.Name)
+        } |
+        ForEach-Object {
+            $_.Name
+        } |
         Sort-Object -Unique
     )
 
     $primaryGroupName = $null
+
     if ($primaryGroups.Count -gt 0) {
         $primaryGroupName = $primaryGroups[0].Name
     }
@@ -585,18 +771,25 @@ try {
         LockedOut = [bool]$effectiveLockedOut
         LockedOutFromGetADUser = [bool]$isLockedOut
         LockedOutFromSearchADAccount = [bool]$searchAdAccountLockedOut
-        LockoutStatusSource = "PDC emulator: Get-ADUser plus scoped Search-ADAccount"
+        LockoutStatusSource = (
+            "PDC emulator: Get-ADUser plus scoped Search-ADAccount"
+        )
         LockoutTime = ConvertTo-IsoDateTime -Value $lockoutTime
         BadPasswordCount = $lockoutUser.badPwdCount
-        LastBadPasswordTime = ConvertTo-IsoDateTime -Value $lastBadPasswordTime
-        LastBadPasswordAttempt = ConvertTo-IsoDateTime -Value $lockoutUser.LastBadPasswordAttempt
+        LastBadPasswordTime = ConvertTo-IsoDateTime `
+            -Value $lastBadPasswordTime
+        LastBadPasswordAttempt = ConvertTo-IsoDateTime `
+            -Value $lockoutUser.LastBadPasswordAttempt
         PasswordExpired = [bool]$user.PasswordExpired
-        PasswordLastSet = ConvertTo-IsoDateTime -Value $user.PasswordLastSet
+        PasswordLastSet = ConvertTo-IsoDateTime `
+            -Value $user.PasswordLastSet
         PasswordNeverExpires = [bool]$user.PasswordNeverExpires
         CannotChangePassword = [bool]$user.CannotChangePassword
         PasswordNotRequired = [bool]$user.PasswordNotRequired
-        AccountExpirationDate = ConvertTo-IsoDateTime -Value $user.AccountExpirationDate
-        LastLogonDate = ConvertTo-IsoDateTime -Value $user.LastLogonDate
+        AccountExpirationDate = ConvertTo-IsoDateTime `
+            -Value $user.AccountExpirationDate
+        LastLogonDate = ConvertTo-IsoDateTime `
+            -Value $user.LastLogonDate
         DistinguishedName = $user.DistinguishedName
         CanonicalName = $user.CanonicalName
         Mail = $user.Mail
@@ -621,16 +814,16 @@ try {
         ManagerEnabled = $managerDetails.Enabled
         ManagerResolutionError = $managerDetails.ResolutionError
         PrimaryGroupName = $primaryGroupName
-        PrimaryGroups = $primaryGroups
-        DirectGroupMembershipCount = $directGroups.Count
-        NestedGroupMembershipCount = $nestedGroups.Count
-        EffectiveGroupMembershipCount = $effectiveGroups.Count
-        DirectGroupNames = $directGroupNames
-        NestedGroupNames = $nestedGroupNames
-        EffectiveGroupNames = $effectiveGroupNames
-        DirectGroups = $directGroups
-        NestedGroups = $nestedGroups
-        EffectiveGroups = $effectiveGroups
+        PrimaryGroups = @($primaryGroups)
+        DirectGroupMembershipCount = @($directGroups).Count
+        NestedGroupMembershipCount = @($nestedGroups).Count
+        EffectiveGroupMembershipCount = @($effectiveGroups).Count
+        DirectGroupNames = @($directGroupNames)
+        NestedGroupNames = @($nestedGroupNames)
+        EffectiveGroupNames = @($effectiveGroupNames)
+        DirectGroups = @($directGroups)
+        NestedGroups = @($nestedGroups)
+        EffectiveGroups = @($effectiveGroups)
         WhenCreated = ConvertTo-IsoDateTime -Value $user.whenCreated
         WhenChanged = ConvertTo-IsoDateTime -Value $user.whenChanged
         Domain = $domain.DNSRoot
@@ -639,14 +832,20 @@ try {
         ExecutionComputer = $executionComputer
     }
 
-    $result | ConvertTo-Json -Compress -Depth 12
+    $result |
+        ConvertTo-Json `
+            -Compress `
+            -Depth 12
+
     exit 0
 }
 catch {
     $failureResult = [ordered]@{
         Success = $false
         UserIdentifier = $UserIdentifier
-        ExecutionIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        ExecutionIdentity = (
+            [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        )
         ExecutionComputer = $env:COMPUTERNAME
         ErrorType = $_.Exception.GetType().FullName
         Error = $_.Exception.Message
@@ -654,6 +853,12 @@ catch {
         PositionMessage = $_.InvocationInfo.PositionMessage
     }
 
-    Write-Error ($failureResult | ConvertTo-Json -Compress -Depth 12)
+    Write-Error (
+        $failureResult |
+        ConvertTo-Json `
+            -Compress `
+            -Depth 12
+    )
+
     exit 1
 }
