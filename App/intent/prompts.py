@@ -10,6 +10,7 @@ they are not a keyword list.
 
 SUPPORTED INTENTS
 - get_user_details: view, find, check, show, retrieve, inspect, or look up one user's account or profile.
+- get_computer_details: view, find, check, show, retrieve, inspect, or look up one Active Directory computer account, workstation, server, machine, device, hostname, or computer object.
 - password_reset: reset, change, replace, generate, issue, or recover one user's password.
 - account_unlock: unlock one user's account so the user can sign in again.
 - failed_login_investigation: investigate, diagnose, explain, review, or find the cause of failed sign-ins, authentication failures, or lockouts. Asking why an account is locked is investigation, not account_unlock.
@@ -23,6 +24,8 @@ SUPPORTED INTENTS
 
 MEANING AND DISAMBIGUATION
 - "Can you check John?", when accompanied by an email, username, employee number, or user ID and no other operation, normally means get_user_details.
+- "Show the AD object for PC-104", "What OS is registered for server01?", and "Look up workstation PC-104" mean get_computer_details.
+- get_computer_details is read-only. Requests to create, delete, rename, move, enable, disable, join, remove, repair trust, or otherwise modify a computer are not get_computer_details.
 - "User cannot log in because the account is locked; unlock it" means account_unlock.
 - "Why does this user keep getting locked?" means failed_login_investigation.
 - "User forgot the password", "needs a new password", or "cannot remember the password" means password_reset.
@@ -31,15 +34,23 @@ MEANING AND DISAMBIGUATION
 - Prefer the most specific supported intent indicated by the full request.
 - Do not invent an intent when the operation is genuinely unclear.
 
-TARGET RULES
+TARGET USER RULES
 For get_user_details, password_reset, account_unlock, failed_login_investigation,
 grant_access, and revoke_access, identify one target user from an email, UPN,
 username, employee number, or user ID explicitly stated in the request.
 - If an email is stated, set email to the full address and username to the exact local part before @. Set username_source to "derived_from_email".
 - If a username is stated without an email, set username and username_source to "explicit".
 - Never use generic words such as user, employee, account, person, him, her, them, somebody, or everyone as username.
-- If no resolvable target is stated, leave target fields null. Do not ask a question in JSON.
-- If multiple target users are requested, leave all target identity fields null so the single-user guardrail can reject the request.
+- If no resolvable target is stated, leave target fields null.
+- If multiple target users are requested, leave all target identity fields null.
+
+COMPUTER TARGET RULES
+For get_computer_details, extract exactly one computer identifier into hostname.
+- Valid identifiers include a short computer name, DNS hostname, SAM account name ending in $, distinguished name, GUID, or SID.
+- Preserve the identifier exactly as written except surrounding whitespace.
+- Never place a person's name, email address, user account, group, department, IP-only request, or a generic word such as computer, server, workstation, machine, device, host, or hostname into hostname.
+- If multiple computers are requested, leave hostname null.
+- get_computer_details always uses script. Do not select API or Entra for this operation.
 
 GROUP RULES
 - For grant_access and revoke_access, extract group_name from the group named in the request.
@@ -51,10 +62,11 @@ INVESTIGATION RULES
 
 BACKEND RULES
 Select execution_backend only when the user explicitly requests one:
-- api: "via API", "using API", "Microsoft Graph", "Graph API"
+- api: "via API", "using API", "on Entra", "Microsoft Entra", "Microsoft Graph", "Graph API"
 - script: "via script", "using script", "PowerShell", "AD script"
 - Otherwise return null. Application policy applies defaults after extraction:
-  get_user_details defaults to script; password_reset defaults to api.
+  get_user_details defaults to script; password_reset defaults to api;
+  get_computer_details always uses script.
 Never infer a backend from the operation itself.
 
 SECURITY RULES
@@ -69,52 +81,37 @@ code fences, or additional text.
 
 Use exactly this schema:
 {{
-  "intent": "get_user_details|password_reset|account_unlock|grant_access|revoke_access|failed_login_investigation|create_user|delete_user|create_group|create_vm|unknown",
+  "intent": "get_user_details|get_computer_details|password_reset|account_unlock|grant_access|revoke_access|failed_login_investigation|create_user|delete_user|create_group|create_vm|unknown",
   "confidence": 0.0,
   "explanation": "brief reason based on the request meaning",
   "metadata": {{
-    "username": null,
-    "user_id": null,
-    "email": null,
-    "employee_number": null,
-    "username_source": null,
-    "group_name": null,
-    "time_window": null,
-    "execution_backend": null,
-    "first_name": null,
-    "last_name": null,
-    "department": null,
-    "target_ou": null,
-    "description": null,
-    "target_host": null,
-    "vm_name": null,
-    "cpu_count": null,
-    "ram_gb": null,
-    "vswitch_name": null,
-    "ip_address": null,
-    "subnet": null,
-    "gateway": null,
-    "dns": null,
-    "hostname": null,
-    "domain": null,
-    "domain_user": null,
-    "approval_granted": false
+    "username": null, "user_id": null, "email": null,
+    "employee_number": null, "username_source": null,
+    "group_name": null, "time_window": null,
+    "execution_backend": null, "first_name": null, "last_name": null,
+    "department": null, "target_ou": null, "description": null,
+    "target_host": null, "vm_name": null, "cpu_count": null,
+    "ram_gb": null, "vswitch_name": null, "ip_address": null,
+    "subnet": null, "gateway": null, "dns": null, "hostname": null,
+    "domain": null, "domain_user": null, "approval_granted": false
   }}
 }}
 
 Examples showing semantic variety:
-
 Request: Please pull up roshan.sah@coforge.com
 Response: {{"intent":"get_user_details","confidence":0.96,"explanation":"The operator wants to view one user's profile.","metadata":{{"username":"roshan.sah","user_id":null,"email":"roshan.sah@coforge.com","employee_number":null,"username_source":"derived_from_email","group_name":null,"time_window":null,"execution_backend":null,"first_name":null,"last_name":null,"department":null,"target_ou":null,"description":null,"target_host":null,"vm_name":null,"cpu_count":null,"ram_gb":null,"vswitch_name":null,"ip_address":null,"subnet":null,"gateway":null,"dns":null,"hostname":null,"domain":null,"domain_user":null,"approval_granted":false}}}}
 
-Request: This account belongs to sritam.nanda@coforge.com, can you tell me what is configured on it?
-Response: {{"intent":"get_user_details","confidence":0.95,"explanation":"The operator is asking to inspect one user's account configuration.","metadata":{{"username":"sritam.nanda","user_id":null,"email":"sritam.nanda@coforge.com","employee_number":null,"username_source":"derived_from_email","group_name":null,"time_window":null,"execution_backend":null,"first_name":null,"last_name":null,"department":null,"target_ou":null,"description":null,"target_host":null,"vm_name":null,"cpu_count":null,"ram_gb":null,"vswitch_name":null,"ip_address":null,"subnet":null,"gateway":null,"dns":null,"hostname":null,"domain":null,"domain_user":null,"approval_granted":false}}}}
+Request: Show the AD computer record for IN-TZ1-AIOPS1
+Response: {{"intent":"get_computer_details","confidence":0.98,"explanation":"The operator wants to inspect one Active Directory computer object.","metadata":{{"username":null,"user_id":null,"email":null,"employee_number":null,"username_source":null,"group_name":null,"time_window":null,"execution_backend":"script","first_name":null,"last_name":null,"department":null,"target_ou":null,"description":null,"target_host":null,"vm_name":null,"cpu_count":null,"ram_gb":null,"vswitch_name":null,"ip_address":null,"subnet":null,"gateway":null,"dns":null,"hostname":"IN-TZ1-AIOPS1","domain":null,"domain_user":null,"approval_granted":false}}}}
+
+Request: What operating system is PC-104.coforge.com registered with in AD?
+Response: {{"intent":"get_computer_details","confidence":0.97,"explanation":"The operator wants details from one AD computer account.","metadata":{{"username":null,"user_id":null,"email":null,"employee_number":null,"username_source":null,"group_name":null,"time_window":null,"execution_backend":"script","first_name":null,"last_name":null,"department":null,"target_ou":null,"description":null,"target_host":null,"vm_name":null,"cpu_count":null,"ram_gb":null,"vswitch_name":null,"ip_address":null,"subnet":null,"gateway":null,"dns":null,"hostname":"PC-104.coforge.com","domain":null,"domain_user":null,"approval_granted":false}}}}
 
 Request: User derhant forgot the password and needs another one
 Response: {{"intent":"password_reset","confidence":0.97,"explanation":"The user needs a replacement password.","metadata":{{"username":"derhant","user_id":null,"email":null,"employee_number":null,"username_source":"explicit","group_name":null,"time_window":null,"execution_backend":null,"first_name":null,"last_name":null,"department":null,"target_ou":null,"description":null,"target_host":null,"vm_name":null,"cpu_count":null,"ram_gb":null,"vswitch_name":null,"ip_address":null,"subnet":null,"gateway":null,"dns":null,"hostname":null,"domain":null,"domain_user":null,"approval_granted":false}}}}
 
 Request: Figure out what keeps locking aman.gupta@coforge.com during the last 48 hours
-Response: {{"intent":"failed_login_investigation","confidence":0.98,"explanation":"The operator wants the cause of repeated account lockouts investigated.","metadata":{{"username":"aman.gupta","user_id":null,"email":"aman.gupta@coforge.com","employee_number":null,"username_source":"derived_from_email","group_name":null,"time_window":"last 48 hours","execution_backend":null,"first_name":null,"last_name":null,"department":null,"target_ou":null,"description":null,"target_host":null,"vm_name":null,"cpu_count":null,"ram_gb":null,"vswitch_name":null,"ip_address":null,"subnet":null,"gateway":null,"dns":null,"hostname":null,"domain":null,"domain_user":null,"approval_granted":false}}}}
+Response: {{"intent":"failed_login_investigation","confidence":0.98,"explanation":"The operator wants repeated account lockouts investigated.","metadata":{{"username":"aman.gupta","user_id":null,"email":"aman.gupta@coforge.com","employee_number":null,"username_source":"derived_from_email","group_name":null,"time_window":"last 48 hours","execution_backend":null,"first_name":null,"last_name":null,"department":null,"target_ou":null,"description":null,"target_host":null,"vm_name":null,"cpu_count":null,"ram_gb":null,"vswitch_name":null,"ip_address":null,"subnet":null,"gateway":null,"dns":null,"hostname":null,"domain":null,"domain_user":null,"approval_granted":false}}}}
 
 Request: Give xyz@coforge.com access through TechAI_Group
 Response: {{"intent":"grant_access","confidence":0.97,"explanation":"The operator wants one user added to a group.","metadata":{{"username":"xyz","user_id":null,"email":"xyz@coforge.com","employee_number":null,"username_source":"derived_from_email","group_name":"TechAI_Group","time_window":null,"execution_backend":null,"first_name":null,"last_name":null,"department":null,"target_ou":null,"description":null,"target_host":null,"vm_name":null,"cpu_count":null,"ram_gb":null,"vswitch_name":null,"ip_address":null,"subnet":null,"gateway":null,"dns":null,"hostname":null,"domain":null,"domain_user":null,"approval_granted":false}}}}

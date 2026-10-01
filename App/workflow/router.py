@@ -58,6 +58,9 @@ class AgentRouter:
 
         IntentType.CREATE_VM:
             AgentType.IDENTITY,
+        
+        IntentType.GET_COMPUTER_DETAILS:
+            AgentType.IDENTITY,
     }
 
     def route(

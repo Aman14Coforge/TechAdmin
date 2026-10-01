@@ -1,25 +1,9 @@
+"""Identity Agent Module.
+
+Validates operation readiness, derives usernames from explicit email addresses,
+selects the registered MCP server/tool, and executes identity and directory
+operations. Includes read-only Active Directory computer lookup.
 """
-Identity Agent Module
-
-Purpose:
-    Validate Identity operation readiness, derive a username from an
-    explicitly supplied email when necessary, ask for missing
-    information, select the correct MCP server and execute the correct
-    MCP tool.
-
-Supported operations:
-    - Password reset through Microsoft Graph or PowerShell
-    - Get user details through Microsoft Graph or PowerShell
-    - Account unlock through PowerShell
-    - Grant access through PowerShell
-    - Revoke access through PowerShell
-    - Failed-login investigation
-    - Create Active Directory user through PowerShell
-    - Delete Active Directory user through PowerShell
-    - Create Active Directory group through PowerShell
-    - Create Hyper-V virtual machine through PowerShell
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -42,57 +26,27 @@ from App.workflow.state import (
 
 
 class IdentityAgent:
-    """Identity and access-management agent using deterministic MCP routing."""
+    """Identity, access, and directory-read agent using deterministic MCP routing."""
 
     EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
     REQUIRED_FIELDS: dict[IntentType, tuple[str, ...]] = {
-        IntentType.PASSWORD_RESET: (
-            "username",
-            "execution_backend",
-        ),
-        IntentType.ACCOUNT_UNLOCK: (
-            "username",
-        ),
-        IntentType.GRANT_ACCESS: (
-            "username",
-            "group_name",
-        ),
-        IntentType.REVOKE_ACCESS: (
-            "username",
-            "group_name",
-        ),
-        IntentType.GET_USER_DETAILS: (
-            "username",
-            "execution_backend",
-        ),
-        IntentType.FAILED_LOGIN_INVESTIGATION: (
-            "username",
-        ),
+        IntentType.PASSWORD_RESET: ("username", "execution_backend"),
+        IntentType.ACCOUNT_UNLOCK: ("username",),
+        IntentType.GRANT_ACCESS: ("username", "group_name"),
+        IntentType.REVOKE_ACCESS: ("username", "group_name"),
+        IntentType.GET_USER_DETAILS: ("username", "execution_backend"),
+        IntentType.GET_COMPUTER_DETAILS: ("hostname", "execution_backend"),
+        IntentType.FAILED_LOGIN_INVESTIGATION: ("username",),
         IntentType.CREATE_USER: (
-            "first_name",
-            "last_name",
-            "username",
-            "email",
-            "department",
-            "initial_password",
+            "first_name", "last_name", "username", "email",
+            "department", "initial_password",
         ),
-        IntentType.DELETE_USER: (
-            "first_name",
-            "last_name",
-            "username",
-        ),
-        IntentType.CREATE_GROUP: (
-            "group_name",
-        ),
+        IntentType.DELETE_USER: ("first_name", "last_name", "username"),
+        IntentType.CREATE_GROUP: ("group_name",),
         IntentType.CREATE_VM: (
-            "target_host",
-            "vm_name",
-            "cpu_count",
-            "ram_gb",
-            "vswitch_name",
-            "hostname",
-            "admin_password",
+            "target_host", "vm_name", "cpu_count", "ram_gb",
+            "vswitch_name", "hostname", "admin_password",
         ),
     }
 
@@ -102,6 +56,7 @@ class IdentityAgent:
         IntentType.GRANT_ACCESS: ToolName.MANAGE_ACCESS,
         IntentType.REVOKE_ACCESS: ToolName.MANAGE_ACCESS,
         IntentType.GET_USER_DETAILS: ToolName.GET_USER_DETAILS,
+        IntentType.GET_COMPUTER_DETAILS: ToolName.GET_COMPUTER_DETAILS,
         IntentType.FAILED_LOGIN_INVESTIGATION: ToolName.INVESTIGATE_FAILED_LOGIN,
         IntentType.CREATE_USER: ToolName.CREATE_USER,
         IntentType.DELETE_USER: ToolName.DELETE_USER,
@@ -126,14 +81,14 @@ class IdentityAgent:
         "last_name": "last name",
         "department": "department",
         "target_ou": "target organizational unit",
-        "description": "group description",
+        "description": "description",
         "initial_password": "initial password",
         "target_host": "target Hyper-V host",
         "vm_name": "virtual machine name",
         "cpu_count": "CPU count",
         "ram_gb": "RAM in GB",
         "vswitch_name": "virtual switch name",
-        "hostname": "hostname",
+        "hostname": "computer name or hostname",
         "admin_password": "virtual-machine administrator password",
         "approval_granted": "explicit authorization approval",
     }
@@ -144,13 +99,8 @@ class IdentityAgent:
         "admin_password",
     }
 
-    def __init__(
-        self,
-        *,
-        mcp_client: IdentityMCPClient | None = None,
-    ) -> None:
+    def __init__(self, *, mcp_client: IdentityMCPClient | None = None) -> None:
         self.mcp_client = mcp_client or IdentityMCPClient()
-
         logger.info(
             "IdentityAgent initialized in MCP mode | supported_operations={}",
             self.get_supported_operations(),
@@ -160,10 +110,8 @@ class IdentityAgent:
     def _normalize_intent(operation: str | IntentType) -> IntentType:
         if isinstance(operation, IntentType):
             return operation
-
         if not isinstance(operation, str):
             return IntentType.UNKNOWN
-
         try:
             return IntentType(operation.strip().casefold())
         except ValueError:
@@ -175,34 +123,21 @@ class IdentityAgent:
         metadata: IdentityMetadata,
     ) -> tuple[IdentityMetadata, list[str]]:
         if metadata.username:
-            return (
-                metadata.model_copy(
-                    update={
-                        "username_source": metadata.username_source or "explicit",
-                    }
-                ),
-                [],
-            )
-
+            return metadata.model_copy(
+                update={"username_source": metadata.username_source or "explicit"}
+            ), []
         if not metadata.email or not cls.EMAIL_PATTERN.fullmatch(metadata.email):
             return metadata, []
-
         username = metadata.email.split("@", maxsplit=1)[0].strip()
         if not username:
             return metadata, []
-
         updated_metadata = metadata.model_copy(
-            update={
-                "username": username,
-                "username_source": "derived_from_email",
-            }
+            update={"username": username, "username_source": "derived_from_email"}
         )
-
         logger.info(
             "IDENTITY_METADATA_DERIVED | field=username | source=email | username={}",
             username,
         )
-
         return updated_metadata, ["username"]
 
     @classmethod
@@ -213,8 +148,6 @@ class IdentityAgent:
         metadata: IdentityMetadata,
         derived_fields: list[str],
     ) -> MetadataValidationResult:
-        """Validate required fields and operation-specific approvals."""
-
         required_fields = cls.REQUIRED_FIELDS.get(intent)
         if required_fields is None:
             return MetadataValidationResult(
@@ -228,15 +161,11 @@ class IdentityAgent:
             )
 
         missing_fields: list[str] = []
-
         for field_name in required_fields:
             field_value = getattr(metadata, field_name, None)
-
-            if field_value is None:
-                missing_fields.append(field_name)
-                continue
-
-            if isinstance(field_value, str) and not field_value.strip():
+            if field_value is None or (
+                isinstance(field_value, str) and not field_value.strip()
+            ):
                 missing_fields.append(field_name)
 
         if (
@@ -254,19 +183,18 @@ class IdentityAgent:
         ):
             missing_fields.append("approval_granted")
 
-        if intent is IntentType.CREATE_VM:
-            if (
-                metadata.cpu_count is not None
-                and metadata.cpu_count < 1
-                and "cpu_count" not in missing_fields
-            ):
-                missing_fields.append("cpu_count")
+        # Computer lookup is read-only and must always use PowerShell.
+        if (
+            intent is IntentType.GET_COMPUTER_DETAILS
+            and metadata.execution_backend is not ExecutionBackend.SCRIPT
+            and "execution_backend" not in missing_fields
+        ):
+            missing_fields.append("execution_backend")
 
-            if (
-                metadata.ram_gb is not None
-                and metadata.ram_gb < 1
-                and "ram_gb" not in missing_fields
-            ):
+        if intent is IntentType.CREATE_VM:
+            if metadata.cpu_count is not None and metadata.cpu_count < 1 and "cpu_count" not in missing_fields:
+                missing_fields.append("cpu_count")
+            if metadata.ram_gb is not None and metadata.ram_gb < 1 and "ram_gb" not in missing_fields:
                 missing_fields.append("ram_gb")
 
         if missing_fields:
@@ -290,24 +218,19 @@ class IdentityAgent:
     @classmethod
     def _build_clarification_question(cls, missing_fields: list[str]) -> str:
         labels = [cls.FIELD_LABELS.get(name, name) for name in missing_fields]
-
         if not labels:
             return "Please provide the required operation information."
-
         if len(labels) == 1:
             if missing_fields[0] == "approval_granted":
                 return (
                     "This operation requires explicit authorization approval. "
                     "Please approve the operation before continuing."
                 )
+            if missing_fields[0] == "execution_backend":
+                return "This operation requires the PowerShell script execution method."
             return f"Please provide the {labels[0]}."
-
         if len(labels) == 2:
-            return (
-                "Please provide the following missing information: "
-                f"{labels[0]} and {labels[1]}."
-            )
-
+            return f"Please provide the following missing information: {labels[0]} and {labels[1]}."
         joined_labels = ", ".join(labels[:-1]) + f", and {labels[-1]}"
         return f"Please provide the following missing information: {joined_labels}."
 
@@ -323,32 +246,19 @@ class IdentityAgent:
             "request_id": request_id,
             "correlation_id": correlation_id,
         }
-
-        arguments.update(
-            metadata.model_dump(
-                mode="json",
-                exclude_none=True,
-            )
-        )
-
+        arguments.update(metadata.model_dump(mode="json", exclude_none=True))
         if intent is IntentType.GRANT_ACCESS:
             arguments["action"] = "grant"
         elif intent is IntentType.REVOKE_ACCESS:
             arguments["action"] = "revoke"
-
         return arguments
 
     @classmethod
-    def _safe_metadata_for_logging(
-        cls,
-        metadata: IdentityMetadata,
-    ) -> dict[str, Any]:
+    def _safe_metadata_for_logging(cls, metadata: IdentityMetadata) -> dict[str, Any]:
         data = metadata.model_dump(mode="json", exclude_none=True)
-
         for sensitive_field in cls.SENSITIVE_FIELDS:
             if sensitive_field in data:
                 data[sensitive_field] = "[REDACTED]"
-
         return data
 
     def execute(
@@ -370,7 +280,6 @@ class IdentityAgent:
                     correlation_id=correlation_id,
                 )
             )
-
         raise RuntimeError(
             "IdentityAgent.execute() cannot run inside an active event loop. "
             "Use 'await IdentityAgent.execute_async(...)'."
@@ -385,7 +294,6 @@ class IdentityAgent:
         correlation_id: str = "untracked",
     ) -> AgentExecutionResult:
         intent = self._normalize_intent(operation)
-
         try:
             validated_metadata = (
                 metadata
@@ -399,14 +307,12 @@ class IdentityAgent:
                 correlation_id,
                 exc.error_count(),
             )
-
             validation = MetadataValidationResult(
                 is_valid=False,
                 missing_fields=[],
                 derived_fields=[],
                 message="The extracted metadata did not match the required schema.",
             )
-
             return AgentExecutionResult(
                 success=False,
                 intent=intent,
@@ -422,8 +328,7 @@ class IdentityAgent:
             )
 
         logger.info(
-            "IDENTITY_AGENT_RECEIVED | request_id={} | correlation_id={} | "
-            "intent={} | metadata={}",
+            "IDENTITY_AGENT_RECEIVED | request_id={} | correlation_id={} | intent={} | metadata={}",
             request_id,
             correlation_id,
             intent.value,
@@ -437,7 +342,6 @@ class IdentityAgent:
                 derived_fields=[],
                 message="The requested operation is not supported by the Identity Agent.",
             )
-
             return AgentExecutionResult(
                 success=False,
                 intent=IntentType.UNKNOWN,
@@ -452,31 +356,22 @@ class IdentityAgent:
                 error="Unsupported identity operation",
             )
 
-        validated_metadata, derived_fields = self._derive_username_from_email(
-            validated_metadata
-        )
-
+        validated_metadata, derived_fields = self._derive_username_from_email(validated_metadata)
         validation = self._validate_metadata(
             intent=intent,
             metadata=validated_metadata,
             derived_fields=derived_fields,
         )
-
         if not validation.is_valid:
-            clarification_question = self._build_clarification_question(
-                validation.missing_fields
-            )
-
+            clarification_question = self._build_clarification_question(validation.missing_fields)
             logger.info(
-                "IDENTITY_AGENT_NEEDS_INPUT | request_id={} | correlation_id={} | "
-                "intent={} | missing_fields={} | derived_fields={}",
+                "IDENTITY_AGENT_NEEDS_INPUT | request_id={} | correlation_id={} | intent={} | missing_fields={} | derived_fields={}",
                 request_id,
                 correlation_id,
                 intent.value,
                 validation.missing_fields,
                 validation.derived_fields,
             )
-
             return AgentExecutionResult(
                 success=False,
                 intent=intent,
@@ -509,7 +404,6 @@ class IdentityAgent:
 
         server_module = self.mcp_client.SERVER_MODULES.get(intent.value)
         mcp_tool_name = self.mcp_client.TOOL_NAMES.get(intent.value)
-
         if server_module is None or mcp_tool_name is None:
             return AgentExecutionResult(
                 success=False,
@@ -521,10 +415,7 @@ class IdentityAgent:
                 tool_result=None,
                 clarification_required=False,
                 clarification_question=None,
-                message=(
-                    "The selected operation does not have a complete MCP "
-                    "server registration."
-                ),
+                message="The selected operation does not have a complete MCP server registration.",
                 error="Incomplete MCP registration",
             )
 
@@ -534,11 +425,8 @@ class IdentityAgent:
             request_id=request_id,
             correlation_id=correlation_id,
         )
-
         logger.info(
-            "MCP_TOOL_DISPATCH | request_id={} | correlation_id={} | intent={} | "
-            "selected_agent=identity_agent | selected_server={} | mcp_tool={} | "
-            "application_tool={} | argument_fields={}",
+            "MCP_TOOL_DISPATCH | request_id={} | correlation_id={} | intent={} | selected_agent=identity_agent | selected_server={} | mcp_tool={} | application_tool={} | argument_fields={}",
             request_id,
             correlation_id,
             intent.value,
@@ -553,16 +441,13 @@ class IdentityAgent:
                 operation=intent.value,
                 arguments=mcp_arguments,
             )
-
             tool_result_data = mcp_result.model_dump(mode="json")
             if not tool_result_data.get("operation_id"):
                 tool_result_data.pop("operation_id", None)
-
             tool_result = ToolResult.model_validate(tool_result_data)
         except Exception as exc:
             logger.exception(
-                "MCP_TOOL_EXECUTION_FAILED | request_id={} | correlation_id={} | "
-                "intent={} | selected_server={} | mcp_tool={} | error_type={}",
+                "MCP_TOOL_EXECUTION_FAILED | request_id={} | correlation_id={} | intent={} | selected_server={} | mcp_tool={} | error_type={}",
                 request_id,
                 correlation_id,
                 intent.value,
@@ -570,7 +455,6 @@ class IdentityAgent:
                 mcp_tool_name,
                 type(exc).__name__,
             )
-
             return AgentExecutionResult(
                 success=False,
                 intent=intent,
@@ -586,9 +470,7 @@ class IdentityAgent:
             )
 
         logger.info(
-            "MCP_TOOL_COMPLETED | request_id={} | correlation_id={} | intent={} | "
-            "selected_server={} | mcp_tool={} | application_tool={} | "
-            "tool_status={} | tool_success={} | operation_id={}",
+            "MCP_TOOL_COMPLETED | request_id={} | correlation_id={} | intent={} | selected_server={} | mcp_tool={} | application_tool={} | tool_status={} | tool_success={} | operation_id={}",
             request_id,
             correlation_id,
             intent.value,
@@ -599,7 +481,6 @@ class IdentityAgent:
             tool_result.success,
             tool_result.operation_id,
         )
-
         return AgentExecutionResult(
             success=tool_result.success,
             intent=intent,
@@ -615,5 +496,4 @@ class IdentityAgent:
         )
 
     def get_supported_operations(self) -> list[str]:
-        """Return all Identity operations registered through MCP."""
         return sorted(intent.value for intent in self.TOOL_NAMES)

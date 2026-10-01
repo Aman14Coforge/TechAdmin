@@ -500,6 +500,107 @@ def render_user_details(user: dict[str, Any], backend: Any = None) -> None:
             st.info("No effective group memberships were returned.")
 
 
+def render_computer_details(computer: dict[str, Any]) -> None:
+    identity = computer.get("DirectoryIdentity") if isinstance(computer.get("DirectoryIdentity"), dict) else {}
+    operating_system = computer.get("DirectoryOperatingSystem") if isinstance(computer.get("DirectoryOperatingSystem"), dict) else {}
+    activity = computer.get("DirectoryActivity") if isinstance(computer.get("DirectoryActivity"), dict) else {}
+    ownership = computer.get("OwnershipAndUsage") if isinstance(computer.get("OwnershipAndUsage"), dict) else {}
+    network = computer.get("DirectoryNetwork") if isinstance(computer.get("DirectoryNetwork"), dict) else {}
+    live = computer.get("LiveEndpoint") if isinstance(computer.get("LiveEndpoint"), dict) else {}
+    security = computer.get("SecurityAndDelegation") if isinstance(computer.get("SecurityAndDelegation"), dict) else {}
+    groups = computer.get("GroupMemberships") if isinstance(computer.get("GroupMemberships"), dict) else {}
+
+    st.markdown("### Computer details")
+    show_table([
+        ("Name", identity.get("Name")), ("Display name", identity.get("DisplayName")),
+        ("SAM account name", identity.get("SamAccountName")),
+        ("DNS hostname", identity.get("DNSHostName")),
+        ("Domain", identity.get("Domain")), ("Location", identity.get("Location")),
+        ("Description", identity.get("Description")),
+        ("Distinguished name", identity.get("DistinguishedName")),
+        ("Canonical name", identity.get("CanonicalName")),
+    ], "Identity")
+
+    enabled = identity.get("Enabled")
+    reachable = live.get("ReachableByIcmp")
+    cim_connected = live.get("CimConnected")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if enabled is True: _status_card("Enabled", "Enabled", "ok", "The computer account is enabled.")
+        elif enabled is False: _status_card("Enabled", "Disabled", "bad", "The computer account is disabled.")
+        else: _status_card("Enabled", "Unavailable", "unknown", "Account status was not returned.")
+    with c2:
+        if reachable is True: _status_card("Reachable", "Online", "ok", "Responded to ICMP ping.")
+        elif reachable is False: _status_card("Reachable", "Offline", "bad", "Did not respond to ICMP ping.")
+        else: _status_card("Reachable", "Unavailable", "unknown", "Live collection was not attempted.")
+    with c3:
+        if cim_connected is True: _status_card("Live data", "Connected", "ok", "Remote CIM collection succeeded.")
+        elif cim_connected is False: _status_card("Live data", "Not connected", "unknown", "Remote CIM collection was not successful.")
+        else: _status_card("Live data", "Unavailable", "unknown", "Live collection was not requested.")
+
+    show_table([
+        ("Operating system", operating_system.get("OperatingSystem")),
+        ("OS version", operating_system.get("OperatingSystemVersion")),
+        ("Service pack", operating_system.get("OperatingSystemServicePack")),
+    ], "Operating system (directory)")
+
+    show_table([
+        ("Last logon date", activity.get("LastLogonDate")),
+        ("Last logon timestamp", activity.get("LastLogonTimestamp")),
+        ("Password last set", activity.get("PasswordLastSet")),
+        ("Account expiration date", activity.get("AccountExpirationDate")),
+        ("When created", activity.get("WhenCreated")),
+        ("When changed", activity.get("WhenChanged")),
+    ], "Activity")
+
+    show_table([
+        ("Managed by", ownership.get("ManagedBy", {}).get("DisplayName") if isinstance(ownership.get("ManagedBy"), dict) else ownership.get("ManagedBy")),
+        ("Current logged on user", ownership.get("CurrentLoggedOnUser")),
+    ], "Ownership and usage")
+
+    show_table([
+        ("AD IPv4 address", network.get("ADIPv4Address")),
+        ("AD IPv6 address", network.get("ADIPv6Address")),
+    ], "Directory network")
+
+    if live:
+        show_table([
+            ("Active IPv4 addresses", live.get("ActiveIPv4Addresses")),
+            ("Active IPv6 addresses", live.get("ActiveIPv6Addresses")),
+            ("Default gateways", live.get("DefaultGateways")),
+            ("DNS servers", live.get("DnsServers")),
+            ("Logged on user", live.get("LoggedOnUser")),
+            ("Collection errors", live.get("CollectionErrors")),
+        ], "Live endpoint")
+
+        live_os = live.get("OperatingSystem")
+        live_bios = live.get("Bios")
+        live_hardware = live.get("Hardware")
+        if isinstance(live_os, dict):
+            show_table(flatten_rows(live_os), "Live operating system")
+        if isinstance(live_bios, dict):
+            show_table(flatten_rows(live_bios), "Live BIOS")
+        if isinstance(live_hardware, dict):
+            show_table(flatten_rows(live_hardware), "Live hardware")
+
+    show_table([
+        ("Trusted for delegation", security.get("TrustedForDelegation")),
+        ("Trusted to auth for delegation", security.get("TrustedToAuthForDelegation")),
+        ("Service principal names", security.get("ServicePrincipalNames")),
+        ("Host service accounts", security.get("HostServiceAccounts")),
+    ], "Security and delegation")
+
+    group_list = groups.get("Groups") if isinstance(groups.get("Groups"), list) else []
+    normalised_groups = _normalise_group_rows(group_list)
+    st.markdown("### Group memberships")
+    st.metric("Groups", groups.get("Count") or len(normalised_groups))
+    if normalised_groups:
+        st.dataframe(_group_frame(normalised_groups, nested=False), hide_index=True, width="stretch")
+    else:
+        st.info("No group memberships were returned.")
+
+
 def render_generic_result(result: Dict[str, Any]) -> None:
     execution = result.get("execution"); user_record = result.get("user")
     excluded = {"execution", "user", "new_password", "temporary_password", "_transient_password", "report", "report_markdown", "backend"}
@@ -520,13 +621,18 @@ def render_result(intent: str, result: Dict[str, Any]) -> None:
     if intent == "get_user_details":
         record = result.get("user")
         render_user_details(record if isinstance(record, dict) else result, result.get("backend")); return
+    if intent == "get_computer_details":
+        record = result.get("computer")
+        if isinstance(record, dict): render_computer_details(record)
+        else: st.warning("The computer lookup completed without a structured result payload.")
+        return
     render_generic_result(result)
 
 
 def render_operation_summary(response: Dict[str, Any]) -> None:
     intent = str(response.get("intent") or "Identity operation")
     metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
-    target = metadata.get("email") or metadata.get("username") or metadata.get("user_id") or "Unknown target"
+    target = metadata.get("email") or metadata.get("username") or metadata.get("user_id") or metadata.get("hostname") or metadata.get("vm_name") or metadata.get("group_name") or "Unknown target"
     if response.get("confirmation_required"): status, css = "Confirmation required", "warning"
     elif response.get("success") is True: status, css = "Completed", "success"
     elif response.get("success") is False: status, css = "Failed", "failure"
@@ -666,7 +772,7 @@ def render_recent_operations() -> None:
         status = "Awaiting confirmation" if response.get("confirmation_required") else "Cancelled" if response.get("cancelled") else "Completed" if response.get("success") is True else "Failed"
         operations.append({
             "Operation": str(response.get("intent") or "Identity operation").replace("_", " ").title(),
-            "Target": metadata.get("email") or metadata.get("username") or "Unknown target",
+            "Target": metadata.get("email") or metadata.get("username") or metadata.get("hostname") or metadata.get("vm_name") or metadata.get("group_name") or "Unknown target",
             "Status": status, "Time": turn.get("time", ""),
         })
         if len(operations) == 5: break
