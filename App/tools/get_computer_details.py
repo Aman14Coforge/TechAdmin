@@ -149,6 +149,8 @@ class GetComputerDetailsTool:
                 operation=self.OPERATION,
                 parameters={
                     "ComputerIdentifier": resolved_hostname,
+                    # Directory-only lookup; skip live ping/CIM collection.
+                    "IncludeLiveData": "false",
                 },
                 approval_granted=False,
             )
