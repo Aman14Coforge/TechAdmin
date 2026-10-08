@@ -123,7 +123,7 @@ def clear_local_authentication_state() -> None:
 
 def render_sign_in_screen(*, microsoft_message: str | None = None) -> None:
     st.title("TechAdmin")
-    st.subheader("Sign in to TechAdmin")
+    st.subheader("Sign in to TechAdmin AI")
     if microsoft_message:
         st.warning(microsoft_message)
     microsoft_tab, local_tab = st.tabs(["Microsoft SSO", "Test account"])
