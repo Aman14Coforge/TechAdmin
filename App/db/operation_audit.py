@@ -177,6 +177,27 @@ OPERATION_CATALOG = {
         "risk_level": "HIGH",
         "requires_approval": True,
     },
+    "patch_report": {
+        "operation_code": "PATCH_REPORT",
+        "operation_name": "Get Patch Compliance Report",
+        "tool_name": "get_patch_report",
+        "risk_level": "LOW",
+        "requires_approval": False,
+    },
+    "patch_ticket": {
+        "operation_code": "PATCH_TICKET",
+        "operation_name": "Raise Patch Compliance Ticket",
+        "tool_name": "raise_patch_ticket",
+        "risk_level": "HIGH",
+        "requires_approval": True,
+    },
+    "patch_scan": {
+        "operation_code": "PATCH_SCAN",
+        "operation_name": "Run Ivanti Patch Scan",
+        "tool_name": "run_patch_scan",
+        "risk_level": "MEDIUM",
+        "requires_approval": False,
+    },
 }
 
 # Backend name from the tool result, mapped to the execution_type the design
