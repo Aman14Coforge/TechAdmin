@@ -380,8 +380,9 @@ def _env_set(name: str, default: str) -> Set[str]:
 
 ALLOWED_INTENTS = _env_set(
     "GUARDRAIL_ALLOWED_INTENTS",
-    "get_user_details,password_reset,account_unlock,grant_access,revoke_access,failed_login_investigation,create_user,delete_user,create_group,create_vm",
+    "get_user_details,password_reset,account_unlock,grant_access,revoke_access,failed_login_investigation,create_user,delete_user,create_group,create_vm,patch_report,patch_scan,patch_ticket",
 )
+PATCH_INTENTS = frozenset({"patch_report", "patch_scan", "patch_ticket"})
 FORBIDDEN_OPERATION_PATTERNS = [
     r"\bdelete\s+(all\s+)?(user|users|account|accounts)\b",
     r"\bshut\s*down\b", r"\breboot\s+(the\s+)?server\b",
@@ -438,11 +439,13 @@ ROLE_PERMISSIONS = {
     Role.HELPDESK: {
         "get_user_details", "password_reset", "account_unlock",
         "grant_access", "revoke_access", "failed_login_investigation",
+        "patch_report", "patch_scan","patch_ticket",
     },
     Role.ADMIN: {
         "get_user_details", "password_reset", "account_unlock",
         "grant_access", "revoke_access", "failed_login_investigation",
         "create_user", "delete_user", "create_group", "create_vm",
+        "patch_report", "patch_scan", "patch_ticket",
     },
 }
 DEFAULT_ROLE = os.getenv("GUARDRAIL_DEFAULT_ROLE", Role.HELPDESK)
@@ -472,7 +475,7 @@ DISPLAY_SAFE_FIELDS = {"masked_password", "password_token"}
 HARD_SECRET_MARKERS = ["transientpassword", "passwordhash", "passwordprofile", "passwd", "pwd", "secret", "token", "credential", "mfa", "securityquestion", "apikey", "privatekey", "ssn", "aadhaar", "creditcard", "salary", "compensation"]
 RESET_RATE_LIMIT_COUNT = int(os.getenv("GUARDRAIL_RESET_LIMIT", "3"))
 RESET_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("GUARDRAIL_RESET_WINDOW", "300"))
-CONFIRMATION_REQUIRED_INTENTS = _env_set("GUARDRAIL_CONFIRM_INTENTS", "password_reset,revoke_access,delete_user")
+CONFIRMATION_REQUIRED_INTENTS = _env_set("GUARDRAIL_CONFIRM_INTENTS", "password_reset,revoke_access,delete_user,patch_ticket")
 MSG_NOT_SUPPORTED = "Requested operation is currently not supported."
 MSG_INVALID_INPUT = "The request could not be processed. Please check the user identifier and try again."
 MSG_SINGLE_USER = "Please request one user at a time."
