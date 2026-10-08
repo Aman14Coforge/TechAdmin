@@ -46,3 +46,5 @@ sqlalchemy
 psycopg2-binary
 pydantic-settings
 python-dotenv
+
+APScheduler==3.11.1

@@ -1080,6 +1080,9 @@ def run_input_checks(user_input: str) -> GuardrailDecision:
     Returns:
         The first blocking decision, or allow() if everything passed.
     """
+    from App.intent.patch_extractor import DeterministicPatchExtractor
+
+    patch_request = DeterministicPatchExtractor().matches(user_input)
     checks = (
         check_secrets,
         check_prompt_injection,
@@ -1092,6 +1095,8 @@ def run_input_checks(user_input: str) -> GuardrailDecision:
     )
 
     for check in checks:
+        if patch_request and check is check_full_email_present:
+            continue
         decision = check(user_input)
         if decision.blocked:
             logger.warning(

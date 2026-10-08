@@ -20,10 +20,6 @@ from typing import Any, Dict, Iterable
 import pandas as pd
 import streamlit as st
 import patch_scheduler_bootstrap  # noqa: F401
-from patch_report_ui import (
-    initialize_patch_report_state,
-    render_patch_report,
-)
 
 from flow_service import (
     LOG_FILE,
@@ -37,7 +33,6 @@ from flow_service import (
 from App.db.login_authorization import authorize_claims, extract_display_name
 from App.db.operation_audit import get_user_request_history
 from investigation_report_ui import render_investigation_report
-from patch_report_ui import initialize_patch_report_state, render_patch_report
 
 st.set_page_config(page_title="TechAdmin", page_icon="🛠️", layout="wide")
 
@@ -264,8 +259,6 @@ def init_state() -> None:
     st.session_state.setdefault("pending_confirmation", None)
     st.session_state.setdefault("password_cards", [])
     st.session_state.setdefault("ollama_check_result", None)
-    initialize_patch_report_state()
-    
 
 
 def display_text(value: Any) -> str:
@@ -518,9 +511,6 @@ def render_generic_result(result: Dict[str, Any]) -> None:
 
 
 def render_result(intent: str, result: Dict[str, Any]) -> None:
-    if intent == "patch_report":
-        render_patch_report(result)
-        return
     if intent == "failed_login_investigation":
         report = result.get("report")
         if isinstance(report, dict): render_investigation_report(report)
@@ -537,12 +527,7 @@ def render_result(intent: str, result: Dict[str, Any]) -> None:
 def render_operation_summary(response: Dict[str, Any]) -> None:
     intent = str(response.get("intent") or "Identity operation")
     metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
-    if intent in {"patch_report", "patch_scan"}:
-        target = metadata.get("device_name") or "Ivanti patch fleet"
-    elif intent == "patch_ticket":
-        target = metadata.get("device_name") or "Patch remediation"
-    else:
-        target = metadata.get("email") or metadata.get("username") or metadata.get("user_id") or "Unknown target"
+    target = metadata.get("email") or metadata.get("username") or metadata.get("user_id") or "Unknown target"
     if response.get("confirmation_required"): status, css = "Confirmation required", "warning"
     elif response.get("success") is True: status, css = "Completed", "success"
     elif response.get("success") is False: status, css = "Failed", "failure"
@@ -682,7 +667,7 @@ def render_recent_operations() -> None:
         status = "Awaiting confirmation" if response.get("confirmation_required") else "Cancelled" if response.get("cancelled") else "Completed" if response.get("success") is True else "Failed"
         operations.append({
             "Operation": str(response.get("intent") or "Identity operation").replace("_", " ").title(),
-            "Target": (metadata.get("device_name") or ("Ivanti patch fleet" if response.get("intent") in {"patch_report", "patch_scan"} else None) or metadata.get("email") or metadata.get("username") or "Unknown target"),
+            "Target": metadata.get("email") or metadata.get("username") or "Unknown target",
             "Status": status, "Time": turn.get("time", ""),
         })
         if len(operations) == 5: break

@@ -85,13 +85,14 @@ def require_confirmation(intent: str, target_identifier: str) -> GuardrailDecisi
         "password_reset": "reset the password for",
         "revoke_access": "remove access from",
         "delete_user": "delete",
+        "patch_ticket": "create a patch compliance ticket for",
     }
     action_text = labels.get(intent, f"run '{intent}' against")
     return GuardrailDecision(
         action=GuardrailAction.REQUIRE_CONFIRMATION,
         message="This operation needs your confirmation before it can run.",
         confirmation_prompt=(
-            f"You are about to {action_text} user:\n\n{target_identifier}\n\n"
+            f"You are about to {action_text} {'device' if intent == 'patch_ticket' else 'user'}:\n\n{target_identifier}\n\n"
             "Do you wish to proceed?"
         ),
         violations=[GuardrailViolation(

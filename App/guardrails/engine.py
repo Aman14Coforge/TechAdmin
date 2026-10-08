@@ -305,6 +305,7 @@ from App.guardrails.policy import (
     CONFIRMATION_REQUIRED_INTENTS,
     MSG_INVALID_INPUT,
     MSG_NOT_SUPPORTED,
+    PATCH_INTENTS,
 )
 from App.guardrails.schemas import (
     GuardrailDecision,
@@ -431,6 +432,11 @@ class GuardrailEngine:
             audit("GUARDRAIL_BLOCKED", request_id, decision, intent=intent)
             return decision
 
+        if intent in PATCH_INTENTS:
+            return self._validate_patch_request(
+                intent, metadata, request_id, requester_id, requester_role, confirmed
+            )
+
         # --- Identifier format validation (1.3) ---
         decision = validate_identifier(
             email=metadata.get("email"),
@@ -491,6 +497,49 @@ class GuardrailEngine:
 
         audit("GUARDRAIL_PASSED", request_id, allow(), intent=intent, target=target)
         return allow()
+
+    def _validate_patch_request(
+        self,
+        intent: str,
+        metadata: Dict[str, Any],
+        request_id: str,
+        requester_id: str | None,
+        requester_role: str | None,
+        confirmed: bool,
+    ) -> GuardrailDecision:
+        import re
+
+        device = metadata.get("device_name")
+        target = str(device).strip() if device else "patch compliance fleet"
+        decision = check_authorization(intent, target, requester_id, requester_role)
+        if not decision.blocked and device and (
+            not isinstance(device, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,252}", device.strip())
+        ):
+            decision = block(
+                ViolationCode.INVALID_IDENTIFIER,
+                "Patch Device Validation",
+                "Please provide one valid device name.",
+                "The patch device identifier has an invalid format.",
+            )
+        if not decision.blocked and intent == "patch_ticket" and not device:
+            decision = block(
+                ViolationCode.INVALID_IDENTIFIER,
+                "Patch Device Validation",
+                "Please provide the device name for the patch ticket.",
+                "Ticket creation requires a specific device.",
+            )
+        if not decision.blocked and not confirmed and (
+            intent == "patch_ticket" or intent in CONFIRMATION_REQUIRED_INTENTS
+        ):
+            decision = require_confirmation(intent, target)
+        event = (
+            "GUARDRAIL_BLOCKED" if decision.blocked
+            else "GUARDRAIL_CONFIRMATION_REQUIRED" if decision.needs_confirmation
+            else "GUARDRAIL_PASSED"
+        )
+        audit(event, request_id, decision, intent=intent, target=target)
+        return decision
 
     def sanitize(self, response: Dict[str, Any], intent: str = "") -> Dict[str, Any]:
         """
