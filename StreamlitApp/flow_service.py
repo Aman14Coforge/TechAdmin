@@ -54,11 +54,27 @@ from loguru import logger  # noqa: E402
 from App.services.email_service import EmailConfig, send_password_email  # noqa: E402
 from App.services.password_file import generate_password_file  # noqa: E402
 from App.services.password_vault import password_vault  # noqa: E402
-from App.utils.config import Config  # noqa: E402
+from App.utils.config import Config, Logger  # noqa: E402
 from App.workflow.graph import TechAdminWorkflow  # noqa: E402
 
 
-LOG_FILE = PROJECT_ROOT / "logs" / "techadmin.log"
+LOCAL_APP_DATA = Path(
+    os.getenv("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
+)
+LOG_FILE = LOCAL_APP_DATA / "TechAdmin" / "logs" / "techadmin.log"
+
+# Streamlit does not import App.main, where the application file logger is
+# normally configured. Persist audit write failures from the Streamlit process
+# so they remain available after a credential-launched console closes.
+try:
+    Logger.setup(log_dir=LOG_FILE.parent)
+except Exception as exc:
+    logger.error(
+        "FILE_LOGGING_SETUP_FAILED | path={} | error_type={} | detail={}",
+        LOG_FILE,
+        type(exc).__name__,
+        str(exc)[:200],
+    )
 
 
 class FlowService:

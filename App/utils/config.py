@@ -97,7 +97,7 @@ class Logger:
     """
     
     @staticmethod
-    def setup():
+    def setup(log_dir: Path | None = None):
         """
         Setup logging configuration.
         
@@ -107,8 +107,8 @@ class Logger:
         - File output to logs/ directory
         - Rotation policy
         """
-        log_dir = Path(__file__).parent.parent.parent / "logs"
-        log_dir.mkdir(exist_ok=True)
+        log_dir = log_dir or Path(__file__).parent.parent.parent / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
         
         logger.add(
             str(log_dir / "techadmin.log"),

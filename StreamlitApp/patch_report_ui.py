@@ -135,28 +135,51 @@ def _all_csv(report_date: date, search: str, min_days: int, min_missing: int, so
         } for o, s in pairs]
     return pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
 
+def _inject_patch_styles() -> None:
+    st.markdown("""
+    <style>
+    .patch-heading{font-size:1.7rem;font-weight:650;letter-spacing:-.04em;color:var(--ta-ink,#1B2433);margin:.1rem 0 .25rem}
+    .patch-subtitle{color:var(--ta-muted,#667085);font-size:.85rem;margin-bottom:1.15rem}
+    .patch-eyebrow{color:var(--ta-orange-2,#E14C30);font-size:.68rem;font-weight:750;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.25rem}
+    .patch-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:.85rem 0 1.15rem}
+    .patch-metric{background:#fff;border:1px solid var(--ta-line,#E6E9EF);border-radius:14px;padding:15px 17px;box-shadow:0 1px 2px rgba(16,24,40,.03)}
+    .patch-metric .label{color:var(--ta-muted,#667085);font-size:.72rem;font-weight:600}
+    .patch-metric .value{color:var(--ta-ink,#1B2433);font-size:1.55rem;font-weight:650;letter-spacing:-.035em;margin-top:4px}
+    .patch-card{background:#fff;border:1px solid var(--ta-line,#E6E9EF);border-radius:14px;padding:16px 18px;margin:.75rem 0;box-shadow:0 1px 2px rgba(16,24,40,.03)}
+    .patch-section-title{font-size:1rem;font-weight:650;color:var(--ta-ink,#1B2433);margin:0 0 .15rem}
+    .patch-section-copy{font-size:.76rem;color:var(--ta-muted,#667085);margin:0 0 .85rem}
+    .patch-pager{border:1px solid var(--ta-line,#E6E9EF);border-radius:12px;background:#fff;color:var(--ta-muted,#667085);font-size:.78rem;text-align:center;padding:.62rem .4rem}
+    .patch-export-label{color:var(--ta-ink,#1B2433);font-weight:650;font-size:.9rem;margin:.3rem 0 .4rem}
+    @media(max-width:760px){.patch-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.patch-metric{padding:12px}}
+    </style>
+    """, unsafe_allow_html=True)
+
 def render_patch_report(initial_result: dict[str, Any]) -> None:
     initialize_patch_report_state()
+    _inject_patch_styles()
     initial_date = _date(initial_result.get("as_of"))
     if st.session_state.patch_ui_date is None: st.session_state.patch_ui_date = initial_date.isoformat()
-    st.markdown("### Ivanti patch compliance report")
-    st.caption("Filters, sorting, pagination, and exports read PostgreSQL only. No new Ivanti scan is triggered.")
-    with st.form("patch_report_filters", clear_on_submit=False):
-        c1, c2, c3 = st.columns([2, 1, 1])
-        search = c1.text_input("Search device, discovery ID, or IP address", value=st.session_state.patch_ui_search, placeholder="Example: LP-CIG-0X124306")
-        min_days = c2.number_input("Minimum consecutive days", 1, 365, int(st.session_state.patch_ui_min_days))
-        min_missing = c3.number_input("Minimum missing patches", 1, 100000, int(st.session_state.patch_ui_min_missing))
-        c4, c5, c6 = st.columns([2, 1, 1])
-        sort_label = c4.selectbox("Sort by", list(SORTS), index=list(SORTS).index(st.session_state.patch_ui_sort))
-        page_size = c5.selectbox("Rows per page", PAGE_SIZES, index=PAGE_SIZES.index(st.session_state.patch_ui_page_size))
-        report_date = c6.date_input("Report date", value=_date(st.session_state.patch_ui_date), max_value=date.today())
-        applied = st.form_submit_button("Apply filters", type="primary", width="stretch")
+    st.markdown('<div class="patch-eyebrow">Ivanti · Fleet health</div><div class="patch-heading">Patch compliance</div><div class="patch-subtitle">Monitor missing updates, prioritize exposed devices, and export remediation details. This report reads the latest stored scan and does not trigger a new Ivanti scan.</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown('<div class="patch-section-title">Filter report</div><div class="patch-section-copy">Narrow the device list by identifier, exposure duration, and scan snapshot.</div>', unsafe_allow_html=True)
+        with st.form("patch_report_filters", clear_on_submit=False):
+            c1, c2, c3 = st.columns([2, 1, 1])
+            search = c1.text_input("Search device, discovery ID, or IP address", value=st.session_state.patch_ui_search, placeholder="Example: LP-CIG-0X124306")
+            min_days = c2.number_input("Minimum consecutive days", 1, 365, int(st.session_state.patch_ui_min_days))
+            min_missing = c3.number_input("Minimum missing patches", 1, 100000, int(st.session_state.patch_ui_min_missing))
+            c4, c5, c6 = st.columns([2, 1, 1])
+            sort_label = c4.selectbox("Sort by", list(SORTS), index=list(SORTS).index(st.session_state.patch_ui_sort))
+            page_size = c5.selectbox("Rows per page", PAGE_SIZES, index=PAGE_SIZES.index(st.session_state.patch_ui_page_size))
+            report_date = c6.date_input("Report date", value=_date(st.session_state.patch_ui_date), max_value=date.today())
+            apply_col, reset_col, _ = st.columns([1, 1, 4])
+            applied = apply_col.form_submit_button("Apply filters", type="primary", width="stretch")
+            reset_requested = reset_col.form_submit_button("Reset", width="stretch")
     if applied:
         st.session_state.patch_ui_search = search.strip(); st.session_state.patch_ui_min_days = int(min_days)
         st.session_state.patch_ui_min_missing = int(min_missing); st.session_state.patch_ui_sort = sort_label
         st.session_state.patch_ui_page_size = int(page_size); st.session_state.patch_ui_date = report_date.isoformat()
         st.session_state.patch_ui_offset = 0; st.rerun()
-    if st.button("Reset filters", key="patch_reset_filters"):
+    if reset_requested:
         st.session_state.patch_ui_search = ""; st.session_state.patch_ui_min_days = 1
         st.session_state.patch_ui_min_missing = 1; st.session_state.patch_ui_sort = "Missing patches: high to low"
         st.session_state.patch_ui_page_size = 100; st.session_state.patch_ui_date = initial_date.isoformat()
@@ -166,35 +189,46 @@ def render_patch_report(initial_result: dict[str, Any]) -> None:
     result = _load(chosen_date, st.session_state.patch_ui_search, int(st.session_state.patch_ui_min_days), int(st.session_state.patch_ui_min_missing), SORTS[st.session_state.patch_ui_sort], limit, offset)
     total, devices = result["total"], result["devices"]
     pages = max(1, (total + limit - 1) // limit); page = min(pages, offset // limit + 1)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Matching devices", f"{total:,}"); m2.metric("Missing patch instances", f"{result['missing_total']:,}")
-    m3.metric("14-day ticket eligible", f"{result['eligible']:,}"); m4.metric("Page", f"{page:,} of {pages:,}")
-    if not devices: st.info("No patch-non-compliant devices match the selected filters."); return
-    st.dataframe(_summary(devices), hide_index=True, width="stretch", height=560, column_config={
-        "Missing patches": st.column_config.NumberColumn(format="%d"),
-        "Risk score": st.column_config.NumberColumn(format="%.2f"),
-        "Ticket eligible": st.column_config.CheckboxColumn(),
-    })
+    st.markdown(
+        '<div class="patch-metrics">'
+        f'<div class="patch-metric"><div class="label">Matching devices</div><div class="value">{total:,}</div></div>'
+        f'<div class="patch-metric"><div class="label">Missing patch instances</div><div class="value">{result["missing_total"]:,}</div></div>'
+        f'<div class="patch-metric"><div class="label">14-day ticket eligible</div><div class="value">{result["eligible"]:,}</div></div>'
+        f'<div class="patch-metric"><div class="label">Current page</div><div class="value">{page:,} <span style="font-size:.85rem;color:var(--ta-muted)">/ {pages:,}</span></div></div>'
+        '</div>', unsafe_allow_html=True,
+    )
+    if not devices:
+        with st.container(border=True):
+            st.info("No patch-non-compliant devices match the selected filters.")
+        return
+    with st.container(border=True):
+        st.markdown('<div class="patch-section-title">Devices requiring attention</div><div class="patch-section-copy">Select a device below for its confirmed missing-patch findings and scan telemetry.</div>', unsafe_allow_html=True)
+        st.dataframe(_summary(devices), hide_index=True, width="stretch", height=480, column_config={
+            "Missing patches": st.column_config.NumberColumn(format="%d"),
+            "Risk score": st.column_config.NumberColumn(format="%.2f"),
+            "Ticket eligible": st.column_config.CheckboxColumn(),
+        })
     previous, status, next_page = st.columns([1, 2, 1])
     if previous.button("Previous page", key=f"patch_previous_{offset}", disabled=offset <= 0, width="stretch"):
         st.session_state.patch_ui_offset = max(0, offset - limit); st.rerun()
-    status.markdown(f"<div style='text-align:center;padding:.55rem'>Showing <strong>{offset + 1:,}</strong> to <strong>{min(offset + len(devices), total):,}</strong> of <strong>{total:,}</strong></div>", unsafe_allow_html=True)
+    status.markdown(f'<div class="patch-pager">Showing <strong>{offset + 1:,}–{min(offset + len(devices), total):,}</strong> of <strong>{total:,}</strong> devices</div>', unsafe_allow_html=True)
     if next_page.button("Next page", key=f"patch_next_{offset}", disabled=offset + len(devices) >= total, width="stretch"):
         st.session_state.patch_ui_offset = offset + limit; st.rerun()
+    st.markdown('<div class="patch-export-label">Export report</div>', unsafe_allow_html=True)
     left, right = st.columns(2)
-    left.download_button("Download current page with patch details", _page_csv(devices), f"patch_report_{chosen_date}_page_{page}.csv", "text/csv", width="stretch")
-    right.download_button("Download all matching device summaries", _all_csv(chosen_date, st.session_state.patch_ui_search, int(st.session_state.patch_ui_min_days), int(st.session_state.patch_ui_min_missing), SORTS[st.session_state.patch_ui_sort]), f"patch_report_{chosen_date}_all_devices.csv", "text/csv", width="stretch")
-    st.markdown("### Device patch details")
+    left.download_button("Download page + patch findings", _page_csv(devices), f"patch_report_{chosen_date}_page_{page}.csv", "text/csv", width="stretch", icon=":material/download:")
+    right.download_button("Download all matching devices", _all_csv(chosen_date, st.session_state.patch_ui_search, int(st.session_state.patch_ui_min_days), int(st.session_state.patch_ui_min_missing), SORTS[st.session_state.patch_ui_sort]), f"patch_report_{chosen_date}_all_devices.csv", "text/csv", width="stretch", icon=":material/download:")
+    st.markdown('<div class="patch-export-label" style="margin-top:1.2rem">Device findings</div>', unsafe_allow_html=True)
     for device in devices:
         findings = device.get("findings") or []
         with st.expander(f"{device.get('device_name') or 'Unknown'} · {int(device.get('missing_patch_count') or 0):,} missing · {len(findings):,} details"):
             a, b = st.columns(2)
-            a.write(f"Discovery ID: `{device.get('discovery_id') or 'Unavailable'}`")
-            a.write(f"IP address: `{device.get('ip_address') or 'Unavailable'}`")
-            a.write(f"Operating system: {device.get('os_name') or 'Unavailable'}")
-            b.write(f"Risk score: **{device.get('risk_score') if device.get('risk_score') is not None else 'Unavailable'}**")
-            b.write(f"Consecutive days: **{device.get('consecutive_days') or 0}**")
-            b.write(f"Ticket eligible: **{'Yes' if device.get('ticket_eligible') else 'No'}**")
+            a.markdown(f"**Discovery ID**  \n{device.get('discovery_id') or 'Unavailable'}")
+            a.markdown(f"**IP address**  \n{device.get('ip_address') or 'Unavailable'}")
+            a.markdown(f"**Operating system**  \n{device.get('os_name') or 'Unavailable'}")
+            b.markdown(f"**Risk score**  \n{device.get('risk_score') if device.get('risk_score') is not None else 'Unavailable'}")
+            b.markdown(f"**Consecutive days**  \n{device.get('consecutive_days') or 0}")
+            b.markdown(f"**Ticket eligible**  \n{'Yes' if device.get('ticket_eligible') else 'No'}")
             if device.get("telemetry"):
                 with st.expander("Stored telemetry"): st.json(device["telemetry"])
             if findings: st.dataframe(_finding_frame(findings), hide_index=True, width="stretch")

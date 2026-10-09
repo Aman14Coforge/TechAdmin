@@ -32,7 +32,7 @@ from loguru import logger
 
 NOT_AVAILABLE = "Not Available"
 
-EMAIL_SUBJECT = "Password Reset Successful - Employee Account"
+EMAIL_SUBJECT = "[Confidential] Password Reset Successful - Employee Account"
 
 
 class EmailConfig:
@@ -83,11 +83,11 @@ def build_email_body(
     """
     return (
         f"Hello {manager_name},\n\n"
-        "The password for the following employee has been reset.\n\n"
+        "The password for the following employee has been reset by TechAdmin AI.\n\n"
         f"Employee Username:\n{username}\n\n"
         f"Employee Name:\n{employee_name or username}\n\n"
         f"Temporary Password:\n{password}\n\n"
-        "Please securely communicate this password to the employee.\n\n"
+        "This is one time only password. Please securely communicate this password to the employee.\n\n"
         "Regards,\n"
         "TechAdmin Support Team\n"
     )

@@ -6,8 +6,13 @@ Browser UI for the TechAdmin identity operations.
 
 | File | Purpose |
 |---|---|
-| `app.py` | The Streamlit UI: tabs, forms, result rendering |
-| `flow_service.py` | Thin layer between the UI and the existing workflow |
+| `app.py` | The Streamlit UI: sign-in, sidebar, assistant chat, result cards, history, directory |
+| `ui_theme.py` | All CSS (Coforge navy/orange theme) and inline SVG icons |
+| `flow_service.py` | Thin layer between the UI and the LangGraph workflow (unchanged) |
+| `investigation_report_ui.py` | Failed sign-in / lockout report renderer |
+| `preview_backend.py` | Sample-data backend for `TECHADMIN_UI_PREVIEW=true` (no Ollama, Graph or DB) |
+
+Theme colours and fonts are also set in `.streamlit/config.toml` (`[theme]`, `[theme.sidebar]`).
 
 ## Where these go
 
@@ -68,27 +73,39 @@ GRAPH_TENANT_ID=your-tenant-id
 
 The sidebar shows which of these were found, without printing the secret values.
 
-## The four tabs
+## UI preview mode
 
-**Ask** — free text, e.g. *"Get details for derhant@coforge.com"*. Runs the full
-pipeline: Ollama classifies the intent and extracts the metadata, the router picks the
-agent, the Identity Agent calls the tool. This is the same path as
-`python Scripts/demo_flow.py`, so it shows the intent and the confidence score.
+To work on the interface without Ollama, Microsoft Graph, PowerShell or PostgreSQL:
 
-**Get user details** — a form that takes a username or email and calls Microsoft Graph
-directly. No LLM call, so it responds in well under a second.
+```bash
+# macOS / Linux
+TECHADMIN_UI_PREVIEW=true streamlit run StreamlitApp/app.py
+# Windows PowerShell
+$env:TECHADMIN_UI_PREVIEW="true"; streamlit run StreamlitApp/app.py
+```
 
-**Reset password** — the same, for password resets. The button stays disabled until a
-confirmation checkbox is ticked, because a reset cannot be undone.
+Preview mode uses in-memory sample users (amit.bhagat@, migrationtest2@, migrationtest3@coforge.com),
+accepts any test-account sign-in and shows a "Preview · sample data" badge. **Never enable it on a
+shared or production deployment.**
 
-**History** — everything run in this browser session, downloadable as JSON.
+## Screens
 
-## Why there are two ways to do the same thing
+**Sign-in** — split screen; Microsoft SSO and Test account tabs. Same rules as before: the test
+account works only when `TECHADMIN_LOCAL_LOGIN_ENABLED=true`, and every identity is checked against
+`app_users`.
 
-The **Ask** tab is what you demo: it shows the LLM working. The **form** tabs are what
-you use when testing the Graph integration, because they take the LLM out of the loop —
-if a lookup fails there, the problem is in Graph or the credentials, not in
-classification.
+**Assistant** — chat with the LangGraph pipeline. Results render as cards:
+directory record (status tiles, Overview / Group memberships tabs, copy details), approval
+(Approve and run / Cancel, or reply "yes" / "no"), password reset (masked password, send to
+manager, download TXT), investigation report, and error/policy-blocked cards. Suggestion chips
+under the latest result offer the next likely action. "Technical details" under each message shows
+intent, confidence, IDs and the redacted raw response.
+
+**Request history** — your requests from the operation audit log (`get_user_request_history`).
+
+**Directory** — a read-only lookup form that runs "Get user details for …" through the same pipeline.
+
+The **?** icon in the top bar holds example queries, system status and the Ollama connection test.
 
 ## Design notes
 

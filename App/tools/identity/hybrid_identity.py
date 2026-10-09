@@ -367,6 +367,8 @@ from App.integration.powershell_runner import PowerShellScriptRunner
 from App.workflow.state import ExecutionBackend, ToolName, ToolRequest, ToolResult, ToolStatus
 # --- ADDED FOR PASSWORD ENHANCEMENTS (Amit Bhagat) ---
 from App.services.password_vault import password_vault
+import re
+
 from App.utils.password_masking import mask_password
 from loguru import logger
 
@@ -388,9 +390,19 @@ def _manager_from_script(user: dict[str, Any] | None) -> tuple[str, str]:
     if not isinstance(user, dict):
         return NOT_AVAILABLE, NOT_AVAILABLE
 
+    manager_name = user.get("ManagerName") or user.get("DisplayName")
+    manager_email = user.get("ManagerEmail")
+
+    if not manager_name:
+        manager_dn = user.get("Manager")
+        if isinstance(manager_dn, str) and manager_dn.strip():
+            match = re.search(r"CN=([^,]+)", manager_dn, flags=re.IGNORECASE)
+            if match:
+                manager_name = match.group(1)
+
     return (
-        user.get("ManagerName") or NOT_AVAILABLE,
-        user.get("ManagerEmail") or NOT_AVAILABLE,
+        manager_name or NOT_AVAILABLE,
+        manager_email or NOT_AVAILABLE,
     )
 # --- END ADDED FOR PASSWORD ENHANCEMENTS ---
 
