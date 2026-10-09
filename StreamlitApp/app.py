@@ -1555,6 +1555,24 @@ def _tile(label: str, value: str, tone: str) -> str:
             f'<div class="lb">{escape(label)}</div><div class="vl">{escape(value)}</div></div></div>')
 
 
+def _short_date(value: Any) -> str:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).strftime("%d %b %Y")
+    except ValueError:
+        return str(value)
+
+
+def password_expiry_label(user: dict[str, Any]) -> str:
+    return "Password expired on" if _optional_boolean(user, "PasswordExpired") else "Password expires on"
+
+
+def password_expiry_value(user: dict[str, Any]) -> str:
+    if _optional_boolean(user, "PasswordNeverExpires"):
+        return "Never expires"
+    expiry = _ci_get(user, "PasswordExpiryDate")
+    return _short_date(expiry) if expiry else "Not reported"
+
+
 def user_status_tiles(user: dict[str, Any]) -> str:
     enabled = _optional_boolean(user, "Enabled", "AccountEnabled")
     locked = _optional_boolean(user, "LockedOut")
@@ -1562,13 +1580,17 @@ def user_status_tiles(user: dict[str, Any]) -> str:
     password_never_expires = _optional_boolean(
         user, "PasswordNeverExpires", "password_never_expires"
     )
+    expiry = _ci_get(user, "PasswordExpiryDate")
+    password_value = "Expired" if expired else "Active" if expired is False else "Unavailable"
+    if expiry and expired is not None:
+        password_value += f" · {_short_date(expiry)}"
 
     tiles = [
         _tile("Account status", "Enabled" if enabled else "Disabled" if enabled is False else "Unavailable",
               "ok" if enabled else "bad" if enabled is False else "unk"),
         _tile("Lock status", "Locked" if locked else "Not locked" if locked is False else "Unavailable",
               "bad" if locked else "ok" if locked is False else "unk"),
-        _tile("Password", "Expired" if expired else "Active" if expired is False else "Unavailable",
+        _tile("Password", password_value,
               "bad" if expired else "ok" if expired is False else "unk"),
     ]
     if password_never_expires is True:
@@ -1593,6 +1615,7 @@ def user_copy_text(user: dict[str, Any]) -> str:
         ("Manager", _ci_get(user, "ManagerName", "ManagerDisplayName")),
         ("Enabled", _optional_boolean(user, "Enabled", "AccountEnabled")), ("Locked out", _optional_boolean(user, "LockedOut")),
         ("Password expired", _optional_boolean(user, "PasswordExpired")),
+        (password_expiry_label(user), password_expiry_value(user)),
     ]
     return "\n".join(f"{k}: {display_text(v)}" for k, v in fields if v not in (None, ""))
 
@@ -1630,6 +1653,7 @@ def render_user_details(user: dict[str, Any], backend: Any, response: Dict[str, 
                 ("Manager email", _ci_get(user, "ManagerEmail", "ManagerMail", "ManagerUserPrincipalName")),
                 ("Mobile phone", _ci_get(user, "MobilePhone")),
                 ("Password last set", _ci_get(user, "PasswordLastSet")),
+                (password_expiry_label(user), password_expiry_value(user)),
                 ("Bad password count", _ci_get(user, "BadPasswordCount")),
                 ("Last logon", _ci_get(user, "LastLogonDate")),
                 ("Created", _ci_get(user, "WhenCreated")),
