@@ -1196,7 +1196,7 @@ def clear_local_authentication_state() -> None:
 HERO_HTML = f"""
 <div class="ta-hero">
   <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
-    <div style="position:relative">{coforge_wordmark(44)}</div>
+    <div style="position:relative">{coforge_wordmark(60)}</div>
   <div class="content">
     {operations_icon(60)}
     <div class="ta-kicker">TechAdmin AI</div>
@@ -1914,11 +1914,7 @@ def _status_badge(status: Any) -> str:
 def render_sidebar(claims: dict[str, Any], history: list[dict[str, Any]]) -> None:
     page = st.session_state.page
     with st.sidebar:
-        html_block(f'<div class="ta-side-brand">{coforge_wordmark(38)}</div>')
-        html_block(
-            f'<div class="ta-app-card">{operations_icon(52)}'
-            f'<div style="min-width:0"><strong>TechAdmin AI</strong><span>IT operations copilot</span></div></div>'
-        )
+        html_block(f'<div class="ta-side-brand">{coforge_wordmark(66)}</div>')
         for key, label, icon in PAGES:
             text = f"{label} :gray-badge[{len(history)}]" if key == "history" and history else label
             with st.container(key=f"nav_active_{key}" if page == key else f"nav_{key}"):
@@ -1982,17 +1978,16 @@ def system_health() -> tuple[bool, list[tuple[str, Any]]]:
     return graph_ok and bool(status.get("config_valid")), rows
 
 
-def render_topbar(claims: dict[str, Any], title: str) -> None:
-    healthy, rows = system_health()
+def render_topbar(claims: dict[str, Any]) -> None:
+    _, rows = system_health()
     with st.container(key="topbar"):
         left, help_col, bell_col, me_col = st.columns([12, 0.6, 0.6, 0.6], vertical_alignment="center", gap="small")
         with left:
-            status = ("All systems operational" if healthy else "Configuration needs attention")
             html_block(
-                f'<div class="ta-topbar-title">{escape(title)}</div>'
-                f'<div class="ta-topbar-status{"" if healthy else " warn"}"><span class="ta-dot"></span>{status}'
-                + (' <span class="ta-badge warn" style="margin-left:8px">Preview · sample data</span>' if PREVIEW_MODE else "")
-                + '</div>'
+                f'<div class="ta-topbar-brand">{operations_icon(40)}<div>'
+                '<div class="name">TechAdmin</div>'
+                '<div class="sub">Autonomous Assistant</div>'
+                '</div></div>'
             )
         with help_col:
             with st.popover(":material/help_outline:", help="Help and system status"):
@@ -2211,8 +2206,7 @@ def main() -> None:
     history = request_history()
     page = st.session_state.page
     render_sidebar(claims, history)
-    render_topbar(claims, {"assistant": "Identity assistant", "history": "Request history",
-                           "directory": "Directory"}.get(page, "Identity assistant"))
+    render_topbar(claims)
     if page == "history":
         page_history(history)
     elif page == "directory":

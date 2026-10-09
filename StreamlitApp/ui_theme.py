@@ -11,15 +11,27 @@ from pathlib import Path
 
 import streamlit as st
 
-_COFORGE_LOGO_PATH = Path(__file__).resolve().parent.parent / "Logo" / "Coforge_logo_Coral_White.svg"
+_COFORGE_LOGO_PATH = (
+  Path(__file__).resolve().parent.parent
+  / "logo"
+  / "Coforge_logo_Coral_White.svg"
+)
 _COFORGE_LOGO_DATA_URI = (
   "data:image/svg+xml;base64,"
   + base64.b64encode(_COFORGE_LOGO_PATH.read_bytes()).decode("ascii")
+  if _COFORGE_LOGO_PATH.is_file()
+  else ""
 )
-_OPERATIONS_ICON_PATH = Path(__file__).resolve().parent.parent / "Logo" / "icons8-operations-60.png"
+_OPERATIONS_ICON_PATH = (
+  Path(__file__).resolve().parent.parent
+  / "logo"
+  / "icons8-operations-60.png"
+)
 _OPERATIONS_ICON_DATA_URI = (
-    "data:image/png;base64,"
-    + base64.b64encode(_OPERATIONS_ICON_PATH.read_bytes()).decode("ascii")
+  "data:image/png;base64,"
+  + base64.b64encode(_OPERATIONS_ICON_PATH.read_bytes()).decode("ascii")
+  if _OPERATIONS_ICON_PATH.is_file()
+  else ""
 )
 
 # ---------------------------------------------------------------------------
@@ -107,16 +119,20 @@ def icon_search(size: int = 16, stroke: str = "currentColor") -> str:
 
 
 def coforge_wordmark(size_px: int = 40, light: bool = True) -> str:
-  """Return the official Coforge SVG wordmark sized by its display height."""
-  del light  # The supplied Coral/White logo is intended for the navy brand panels.
-  return (
-    f'<img class="ta-wordmark" src="{_COFORGE_LOGO_DATA_URI}" '
-    f'alt="Coforge" style="display:block;width:auto;height:{size_px}px;max-width:100%">'
-  )
+    """Return the supplied Coforge wordmark, or styled text if it is absent."""
+    del light
+    if not _COFORGE_LOGO_DATA_URI:
+        return f'<span class="ta-wordmark" style="font-size:{size_px}px">Coforge</span>'
+    return (
+        f'<img class="ta-wordmark" src="{_COFORGE_LOGO_DATA_URI}" '
+        f'alt="Coforge" style="display:block;width:auto;height:{size_px}px;max-width:100%">'
+    )
 
 
 def operations_icon(size_px: int = 60) -> str:
   """Return the supplied operations icon as an accessible embedded image."""
+  if not _OPERATIONS_ICON_DATA_URI:
+    return icon_shield(max(16, size_px // 2))
   return (
     f'<img class="ta-operations-icon" src="{_OPERATIONS_ICON_DATA_URI}" '
     f'alt="Operations" style="display:block;width:{size_px}px;height:{size_px}px;object-fit:contain">'
@@ -307,7 +323,7 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: .35rem; }
 [data-testid="stSidebar"] hr { border-color: var(--ta-navy-line); margin: 14px 0; }
 
-.ta-side-brand { padding: 0 8px 14px; }
+.ta-side-brand { padding: 0 8px 14px 24px; }
 .ta-app-card { display:flex; gap: 12px; align-items:center; background: var(--ta-navy-2); border: 1px solid var(--ta-navy-line);
   border-radius: 12px; padding: 14px 14px; margin: 4px 0 14px; }
 .ta-app-card strong { color:#fff; font-size: 14.5px; font-weight: 600; display:block; }
@@ -352,6 +368,11 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 .stMainBlockContainer, .block-container { max-width: 100% !important; padding: 0 0 2rem 0 !important; }
 .st-key-topbar { background: #fff; border-bottom: 1px solid var(--ta-line); padding: 14px 32px 12px; position: sticky; top: 0; z-index: 50; }
 .st-key-topbar [data-testid="stHorizontalBlock"] { align-items: center; }
+.ta-topbar-brand { display:flex; align-items:center; gap:12px; min-height:48px; }
+.ta-topbar-brand .ta-operations-icon { width:40px; height:40px; object-fit:contain; flex:none; }
+.ta-topbar-brand .eyebrow { color:var(--ta-orange-2); font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
+.ta-topbar-brand .name { color:var(--ta-ink); font-size:17px; font-weight:600; line-height:1.25; }
+.ta-topbar-brand .sub { color:var(--ta-muted); font-size:12px; line-height:1.3; margin-top:2px; }
 .ta-topbar-title { font-size: 17px; color: var(--ta-ink); font-weight: 500; line-height: 1.2; }
 .ta-topbar-status { display:flex; align-items:center; gap: 6px; color: var(--ta-muted); font-size: 12px; margin-top: 3px; }
 .ta-topbar-status.warn .ta-dot { background: #E0A100; }
