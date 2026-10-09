@@ -1549,10 +1549,20 @@ def new_conversation() -> None:
 # Result renderers
 # =============================================================================
 
-def _tile(label: str, value: str, tone: str) -> str:
+def _tile(label: str, value: str, tone: str, sub: str = "") -> str:
     icon = {"ok": icon_shield_check, "bad": icon_shield_alert, "warn": icon_shield_alert}.get(tone, icon_shield)(15)
     return (f'<div class="ta-tile {tone}"><div class="ic">{icon}</div><div style="min-width:0">'
-            f'<div class="lb">{escape(label)}</div><div class="vl">{escape(value)}</div></div></div>')
+            f'<div class="lb">{escape(label)}</div><div class="vl">{escape(value)}</div>'
+            + (f'<div class="sb">{escape(sub)}</div>' if sub else "")
+            + '</div></div>')
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone()  # naive script timestamps are server-local time
 
 
 def _short_date(value: Any) -> str:
@@ -1581,17 +1591,28 @@ def user_status_tiles(user: dict[str, Any]) -> str:
         user, "PasswordNeverExpires", "password_never_expires"
     )
     expiry = _ci_get(user, "PasswordExpiryDate")
+    expiry_at = _parse_datetime(expiry) if expiry else None
+    if expiry_at and not expired and expiry_at <= datetime.now().astimezone():
+        expired = True
     password_value = "Expired" if expired else "Active" if expired is False else "Unavailable"
-    if expiry and expired is not None:
-        password_value += f" · {_short_date(expiry)}"
+    password_tone = "bad" if expired else "ok" if expired is False else "unk"
+    password_sub = ""
+    if expiry_at:
+        days_left = (expiry_at - datetime.now().astimezone()).total_seconds() / 86400
+        if expired:
+            password_sub = f"Expired on {expiry_at.strftime('%d %b %Y')}"
+        else:
+            password_sub = f"Expires on {expiry_at.strftime('%d %b %Y')}"
+            password_tone = "warn" if days_left <= 10 else "ok"
+            if days_left <= 10:
+                password_value = f"Expires in {max(0, int(days_left))} day{'s' if int(days_left) != 1 else ''}"
 
     tiles = [
         _tile("Account status", "Enabled" if enabled else "Disabled" if enabled is False else "Unavailable",
               "ok" if enabled else "bad" if enabled is False else "unk"),
         _tile("Lock status", "Locked" if locked else "Not locked" if locked is False else "Unavailable",
               "bad" if locked else "ok" if locked is False else "unk"),
-        _tile("Password", password_value,
-              "bad" if expired else "ok" if expired is False else "unk"),
+        _tile("Password", password_value, password_tone, password_sub),
     ]
     if password_never_expires is True:
         tiles.append(_tile("Password never expires", "Yes", "warn"))

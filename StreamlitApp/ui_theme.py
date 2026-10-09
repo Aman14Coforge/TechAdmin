@@ -456,6 +456,7 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 .ta-tile .ic { width: 30px; height: 30px; border-radius: 50%; background:#fff; display:flex; align-items:center; justify-content:center; flex:none; color: var(--ta-unk); }
 .ta-tile .lb { font-size: 11px; color: var(--ta-muted); }
 .ta-tile .vl { font-size: 14px; font-weight: 600; color: var(--ta-unk); margin-top: 1px; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
+.ta-tile .sb { font-size: 11.5px; color: var(--ta-muted); margin-top: 2px; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
 .ta-tile.ok { background: var(--ta-ok-bg); border-color: var(--ta-ok-line); } .ta-tile.ok .vl, .ta-tile.ok .ic { color: var(--ta-ok); }
 .ta-tile.bad { background: var(--ta-bad-bg); border-color: var(--ta-bad-line); } .ta-tile.bad .vl, .ta-tile.bad .ic { color: var(--ta-bad); }
 .ta-tile.warn { background: var(--ta-warn-bg); border-color: var(--ta-warn-line); } .ta-tile.warn .vl, .ta-tile.warn .ic { color: var(--ta-warn); }
