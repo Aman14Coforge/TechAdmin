@@ -854,13 +854,13 @@
 
 """TechAdmin Streamlit UI.
 
-Identity-operations copilot with Microsoft SSO, local test authentication,
+Identity-operations copilot with Microsoft SSO,
 app_users authorization, LangGraph execution, confirmation handling, secure
 password delivery and request history.
 
 Layout
-    * Split-screen sign-in (Microsoft SSO / Test account)
-    * Navy sidebar: product card, navigation, recent requests, signed-in user
+    * Split-screen sign-in (Microsoft SSO)
+    * Navy sidebar: agent navigation, request history, signed-in user
     * Top bar: page title, system status, help / notifications popovers
     * Assistant: chat with rich result cards (directory record, password reset,
       approval, investigation report), contextual suggestion chips, composer
@@ -877,6 +877,7 @@ import copy
 import hmac
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from html import escape
@@ -980,6 +981,20 @@ def html_block(markup: str) -> None:
     st.markdown(markup, unsafe_allow_html=True)
 
 
+def inject_workspace_layout_css() -> None:
+        st.markdown("""
+        <style>
+            .st-key-content { max-width: min(1000px, 100%) !important; width:100%; }
+            .st-key-history_sidebar_scroll, .st-key-history_page_scroll {
+                overscroll-behavior:contain; scrollbar-gutter:stable; }
+            .st-key-history_page_scroll { width:100%; }
+            .st-key-history_sidebar_scroll::-webkit-scrollbar, .st-key-history_page_scroll::-webkit-scrollbar { width:7px; }
+            .st-key-history_sidebar_scroll::-webkit-scrollbar-thumb, .st-key-history_page_scroll::-webkit-scrollbar-thumb {
+                background:rgba(120,135,155,.45); border-radius:8px; }
+        </style>
+        """, unsafe_allow_html=True)
+
+
 # =============================================================================
 # Constants
 # =============================================================================
@@ -1017,9 +1032,8 @@ INTENT_TITLES = {
 }
 ROLE_TITLES = {"helpdesk": "Helpdesk operator", "admin": "Operations admin", "operations_admin": "Operations admin"}
 PAGES = [
-    ("assistant", "Assistant", ":material/chat_bubble_outline:"),
-    ("history", "Request history", ":material/history:"),
-    ("directory", "Directory", ":material/group:"),
+    ("assistant", "Identity Agent", ":material/smart_toy:"),
+    ("history", "Your History", ":material/history:"),
 ]
 
 
@@ -1041,7 +1055,9 @@ def intent_title(intent: Any) -> str:
 
 
 def initials(name: str) -> str:
-    parts = [p for p in str(name or "").replace(".", " ").replace("@", " ").split() if p[:1].isalpha()]
+    text = str(name or "").split("@", 1)[0]
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    parts = [p for p in re.split(r"[\s._\-]+", text) if p[:1].isalpha()]
     if not parts:
         return "TA"
     if len(parts) == 1:
@@ -1196,14 +1212,14 @@ def clear_local_authentication_state() -> None:
 HERO_HTML = f"""
 <div class="ta-hero">
   <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
-    <div style="position:relative">{coforge_wordmark(60)}</div>
+    <div class="ta-hero-brand">{coforge_wordmark(40)}</div>
   <div class="content">
-    {operations_icon(60)}
-    <div class="ta-kicker">TechAdmin AI</div>
-    <h1>Identity operations,<br>made effortless.</h1>
-    <p class="lead">Resolve access issues and manage employee identities<br>with a secure, intelligent copilot.</p>
+        <div class="ta-hero-product">{operations_icon(42)}<div><div class="ta-hero-product-name"><span>Tech</span>Admin</div>
+        <div class="ta-hero-product-subtitle">Autonomous Assistant</div></div></div>
+        <h1>Intelligent operations,<br>made effortless.</h1>
+        <p class="lead">We’re agentifying identity operations—taking the mundane, repetitive work off your plate with secure, auditable assistance.</p>
   </div>
-  <div class="foot">{icon_shield_check(16)}Enterprise protected · Actions fully audited</div>
+    <div class="ta-hero-footer"><span>Plan</span><i></i><span>Secure</span><i></i><span>Implement</span><i></i><span>Deliver</span></div>
 </div>
 """
 
@@ -1213,6 +1229,22 @@ MS_LOGO = '<span class="ta-ms-logo"><i style="background:#F25022"></i><i style="
 def render_auth_shell(body: Callable[[], None]) -> None:
     """Split-screen frame shared by sign-in, denied and incomplete-session screens."""
     inject_login_css()
+    st.markdown("""
+        <style>
+            .ta-hero-brand { position:relative; z-index:1; }
+            .ta-hero .content { z-index:1; }
+            .ta-hero-product { display:flex; align-items:center; gap:14px; }
+            .ta-hero-product-name { color:#fff; font-size:24px; line-height:1.1; font-weight:600; letter-spacing:-.02em; }
+            .ta-hero-product-name span { color:#EF5B3F; }
+            .ta-hero-product-subtitle { color:#B9C3D1; font-size:13.5px; margin-top:3px; }
+            .ta-hero h1 { margin-top:26px; }
+            .ta-hero p.lead { max-width:460px; }
+            .ta-hero-footer { position:relative; z-index:1; display:flex; flex-wrap:wrap; align-items:center; gap:12px;
+                color:#C8D1DD; font-size:12.5px; font-weight:500; letter-spacing:.02em; }
+            .ta-hero-footer i { width:1px; height:16px; background:#EF5B3F; display:inline-block; }
+            .ta-login-head h2 { margin-top:0; }
+        </style>
+        """, unsafe_allow_html=True)
     with st.container(key="login_shell"):
         left, right = st.columns([0.44, 0.56], gap="small")
         with left:
@@ -1220,14 +1252,13 @@ def render_auth_shell(body: Callable[[], None]) -> None:
         with right:
             with st.container(key="login_form"):
                 body()
-                html_block('<div class="ta-login-legal">Authorized users only · Coforge IT Operations</div>')
+                html_block('<div class="ta-login-legal">Authorized users only · Coforge Global IT</div>')
     st.stop()
 
 
-def _login_heading(title: str = "Sign in to TechAdmin", sub: str = "Access the secure identity operations workspace.") -> None:
+def _login_heading(title: str = "Sign in to TechAdmin", sub: str = "Please use your Coforge SSO ID.") -> None:
     html_block(
-        f'<div class="ta-login-head"><div class="ta-kicker">Welcome back</div>'
-        f'<h2>{escape(title)}</h2><p>{escape(sub)}</p></div>'
+        f'<div class="ta-login-head"><h2>{escape(title)}</h2><p>{escape(sub)}</p></div>'
     )
 
 
@@ -1242,7 +1273,7 @@ def _microsoft_sign_in_button(key: str = "microsoft_sign_in", label: str = "Sign
         except Exception as exc:  # missing [auth] secrets, provider errors
             st.error(f"Microsoft sign-in is not available on this server ({type(exc).__name__}). "
                      "Check the [auth] section of .streamlit/secrets.toml.")
-    html_block('<div class="ta-login-note">Need access? Contact your IT service desk.</div>')
+    html_block('<div class="ta-login-note">Unable to access? Contact your IT service desk.</div>')
 
 
 def render_sign_in_screen(*, microsoft_message: str | None = None) -> None:
@@ -1250,7 +1281,7 @@ def render_sign_in_screen(*, microsoft_message: str | None = None) -> None:
         _login_heading()
         if microsoft_message:
             st.warning(microsoft_message)
-        sso_tab, local_tab = st.tabs(["Microsoft SSO", "Test account"])
+        sso_tab, local_tab = st.tabs(["Microsoft SSO", "Local authentication"])
         with sso_tab:
             _microsoft_sign_in_button()
         with local_tab:
@@ -1262,21 +1293,21 @@ def render_sign_in_screen(*, microsoft_message: str | None = None) -> None:
 def render_local_login() -> None:
     enabled = PREVIEW_MODE or _env_flag("TECHADMIN_LOCAL_LOGIN_ENABLED")
     if not enabled:
-        html_block('<div class="ta-note" style="margin-top:8px">The local test account is disabled on this server. '
+        html_block('<div class="ta-note" style="margin-top:8px">Local authentication is disabled on this server. '
                    'Use Microsoft SSO, or ask an administrator to enable it for local testing.</div>')
         return
     optional = " :gray[Optional for preview]" if PREVIEW_MODE else ""
     with st.form("local_login_form", clear_on_submit=False, border=False):
         username = st.text_input(
             f"Username{optional}", key="local_login_username",
-            placeholder="No username required" if PREVIEW_MODE else "Enter your test username",
+            placeholder="No username required" if PREVIEW_MODE else "Enter your local username",
         )
         password = st.text_input(
             f"Password{optional}", type="password", key="local_login_password",
             placeholder="No password required" if PREVIEW_MODE else "Enter your password",
         )
         submitted = st.form_submit_button("Sign in securely", type="primary", width="stretch")
-    html_block('<div class="ta-login-note">Need access? Contact your IT service desk.</div>')
+    html_block('<div class="ta-login-note">Unable to access? Contact your IT service desk.</div>')
     if not submitted:
         return
     if PREVIEW_MODE:
@@ -1357,7 +1388,7 @@ def require_authentication() -> dict[str, Any]:
     if not extract_display_name(claims):
         def body() -> None:
             _login_heading("Finish signing in", "The current Microsoft session does not contain a usable identity.")
-            sso_tab, local_tab = st.tabs(["Microsoft SSO", "Test account"])
+            sso_tab, local_tab = st.tabs(["Microsoft SSO", "Local authentication"])
             with sso_tab:
                 html_block('<div class="ta-note warn" style="margin:6px 0 16px">Sign out of the incomplete '
                            'Microsoft session, then sign in again.</div>')
@@ -1389,6 +1420,16 @@ def init_state() -> None:
     st.session_state.setdefault("ollama_check_result", None)
     st.session_state.setdefault("page", "assistant")
     st.session_state.setdefault("history_filter", "")
+    st.session_state.setdefault("quick_action", None)
+
+
+def clear_conversation_state() -> None:
+    """Reset conversation keys without leaving them absent on the next rerun."""
+    st.session_state.conversation = []
+    st.session_state.queued_query = None
+    st.session_state.pending_confirmation = None
+    st.session_state.pending_run = None
+    st.session_state.quick_action = None
 
 
 def access_info() -> dict[str, Any]:
@@ -1508,10 +1549,38 @@ def new_conversation() -> None:
 # Result renderers
 # =============================================================================
 
-def _tile(label: str, value: str, tone: str) -> str:
+def _tile(label: str, value: str, tone: str, sub: str = "") -> str:
     icon = {"ok": icon_shield_check, "bad": icon_shield_alert, "warn": icon_shield_alert}.get(tone, icon_shield)(15)
     return (f'<div class="ta-tile {tone}"><div class="ic">{icon}</div><div style="min-width:0">'
-            f'<div class="lb">{escape(label)}</div><div class="vl">{escape(value)}</div></div></div>')
+            f'<div class="lb">{escape(label)}</div><div class="vl">{escape(value)}</div>'
+            + (f'<div class="sb">{escape(sub)}</div>' if sub else "")
+            + '</div></div>')
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone()  # naive script timestamps are server-local time
+
+
+def _short_date(value: Any) -> str:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).strftime("%d %b %Y")
+    except ValueError:
+        return str(value)
+
+
+def password_expiry_label(user: dict[str, Any]) -> str:
+    return "Password expired on" if _optional_boolean(user, "PasswordExpired") else "Password expires on"
+
+
+def password_expiry_value(user: dict[str, Any]) -> str:
+    if _optional_boolean(user, "PasswordNeverExpires"):
+        return "Never expires"
+    expiry = _ci_get(user, "PasswordExpiryDate")
+    return _short_date(expiry) if expiry else "Not reported"
 
 
 def user_status_tiles(user: dict[str, Any]) -> str:
@@ -1521,14 +1590,29 @@ def user_status_tiles(user: dict[str, Any]) -> str:
     password_never_expires = _optional_boolean(
         user, "PasswordNeverExpires", "password_never_expires"
     )
+    expiry = _ci_get(user, "PasswordExpiryDate")
+    expiry_at = _parse_datetime(expiry) if expiry else None
+    if expiry_at and not expired and expiry_at <= datetime.now().astimezone():
+        expired = True
+    password_value = "Expired" if expired else "Active" if expired is False else "Unavailable"
+    password_tone = "bad" if expired else "ok" if expired is False else "unk"
+    password_sub = ""
+    if expiry_at:
+        days_left = (expiry_at - datetime.now().astimezone()).total_seconds() / 86400
+        if expired:
+            password_sub = f"Expired on {expiry_at.strftime('%d %b %Y')}"
+        else:
+            password_sub = f"Expires on {expiry_at.strftime('%d %b %Y')}"
+            password_tone = "warn" if days_left <= 10 else "ok"
+            if days_left <= 10:
+                password_value = f"Expires in {max(0, int(days_left))} day{'s' if int(days_left) != 1 else ''}"
 
     tiles = [
         _tile("Account status", "Enabled" if enabled else "Disabled" if enabled is False else "Unavailable",
               "ok" if enabled else "bad" if enabled is False else "unk"),
         _tile("Lock status", "Locked" if locked else "Not locked" if locked is False else "Unavailable",
               "bad" if locked else "ok" if locked is False else "unk"),
-        _tile("Password", "Expired" if expired else "Active" if expired is False else "Unavailable",
-              "bad" if expired else "ok" if expired is False else "unk"),
+        _tile("Password", password_value, password_tone, password_sub),
     ]
     if password_never_expires is True:
         tiles.append(_tile("Password never expires", "Yes", "warn"))
@@ -1552,6 +1636,7 @@ def user_copy_text(user: dict[str, Any]) -> str:
         ("Manager", _ci_get(user, "ManagerName", "ManagerDisplayName")),
         ("Enabled", _optional_boolean(user, "Enabled", "AccountEnabled")), ("Locked out", _optional_boolean(user, "LockedOut")),
         ("Password expired", _optional_boolean(user, "PasswordExpired")),
+        (password_expiry_label(user), password_expiry_value(user)),
     ]
     return "\n".join(f"{k}: {display_text(v)}" for k, v in fields if v not in (None, ""))
 
@@ -1589,6 +1674,7 @@ def render_user_details(user: dict[str, Any], backend: Any, response: Dict[str, 
                 ("Manager email", _ci_get(user, "ManagerEmail", "ManagerMail", "ManagerUserPrincipalName")),
                 ("Mobile phone", _ci_get(user, "MobilePhone")),
                 ("Password last set", _ci_get(user, "PasswordLastSet")),
+                (password_expiry_label(user), password_expiry_value(user)),
                 ("Bad password count", _ci_get(user, "BadPasswordCount")),
                 ("Last logon", _ci_get(user, "LastLogonDate")),
                 ("Created", _ci_get(user, "WhenCreated")),
@@ -1911,55 +1997,60 @@ def _status_badge(status: Any) -> str:
     return f'<span class="ta-badge {tone}">{escape(text.capitalize())}</span>'
 
 
-def render_sidebar(claims: dict[str, Any], history: list[dict[str, Any]]) -> None:
-    page = st.session_state.page
-    with st.sidebar:
-        html_block(f'<div class="ta-side-brand">{coforge_wordmark(66)}</div>')
-        for key, label, icon in PAGES:
-            text = f"{label} :gray-badge[{len(history)}]" if key == "history" and history else label
-            with st.container(key=f"nav_active_{key}" if page == key else f"nav_{key}"):
-                if st.button(text, key=f"navbtn_{key}", icon=icon, width="stretch"):
-                    st.session_state.page = key
-                    st.rerun()
+def sign_out(claims: dict[str, Any]) -> None:
+    is_local = claims.get("auth_source") == "local_test_account"
+    clear_local_authentication_state()
+    clear_conversation_state()
+    if is_local:
+        st.rerun()
+    else:
+        st.logout()
 
-        st.divider()
+
+def render_sidebar(history: list[dict[str, Any]]) -> None:
+    page = st.session_state.page
+    agents_open = bool(st.session_state.get("agents_open"))
+    with st.sidebar:
+        html_block(f'<div class="ta-side-brand">{coforge_wordmark(46)}</div>')
+        with st.container(key="agents_toggle_open" if agents_open else "agents_toggle"):
+            if st.button("AI Agents", key="agents_toggle_btn", icon=":material/apps:", width="stretch"):
+                st.session_state.agents_open = not agents_open
+                st.rerun()
+        if agents_open:
+            with st.container(key="agent_list"):
+                with st.container(key="agent_identity_active" if page == "assistant" else "agent_identity"):
+                    if st.button("Identity Agent", key="navbtn_assistant", icon=":material/badge:", width="stretch"):
+                        st.session_state.page = "assistant"
+                        st.rerun()
+                html_block(
+                    '<div class="ta-agent-soon"><span class="material-symbols-rounded">shield</span>'
+                    '<span class="nm">Security Agent</span><span class="pill">Soon</span></div>'
+                    '<div class="ta-agent-soon"><span class="material-symbols-rounded">lan</span>'
+                    '<span class="nm">Network Agent</span><span class="pill">Soon</span></div>'
+                )
+        with st.container(key="nav_active_history" if page == "history" else "nav_history"):
+            if st.button("Your History", key="navbtn_history", icon=":material/history:", width="stretch"):
+                st.session_state.page = "history"
+                st.rerun()
+
         head_l, head_r = st.columns([5, 1], vertical_alignment="center")
         head_l.markdown('<div class="ta-side-label">Recent requests</div>', unsafe_allow_html=True)
         with head_r:
             with st.container(key="side_search"):
                 with st.popover(":material/search:"):
-                    st.text_input("Filter recent requests", key="history_filter", placeholder="Email or operation")
+                    st.text_input("Filter your history", key="history_filter", placeholder="Email or operation")
         term = str(st.session_state.get("history_filter") or "").strip().casefold()
-        shown = [h for h in history if not term or term in json.dumps(h, default=str).casefold()][:6]
-        if not shown:
-            html_block('<div class="ta-side-empty">No requests recorded yet.</div>' if not term
-                       else '<div class="ta-side-empty">No matching requests.</div>')
-        items = []
-        for i, item in enumerate(shown):
-            sub = " · ".join(p for p in (str(item.get("target") or ""), time_ago(item.get("requested_at"))) if p)
-            active = " active" if i == 0 and page == "assistant" and st.session_state.conversation else ""
-            items.append(f'<div class="ta-recent{active}" title="{escape(str(item.get("request") or ""))}">'
-                         f'<strong>{escape(_history_title(item))}</strong><span>{escape(sub)}</span></div>')
-        html_block("".join(items))
-
-        with st.container(key="side_bottom"):
-            name = claims.get("name") or claims.get("preferred_username") or "TechAdmin User"
-            role = ROLE_TITLES.get(str(get_config_status().get("requester_role") or "").casefold(), "Operations admin")
-            dept = access_info().get("department")
-            html_block(
-                f'<div class="ta-me"><div class="ta-avatar dark">{escape(initials(name))}</div><div style="min-width:0">'
-                f'<strong>{escape(str(name))}</strong><span>{escape(str(dept or role))}</span></div></div>'
-            )
-            with st.container(key="sign_out"):
-                if st.button("Sign out", key="sign_out_btn", icon=":material/logout:", width="stretch"):
-                    is_local = claims.get("auth_source") == "local_test_account"
-                    clear_local_authentication_state()
-                    for k in ("conversation", "pending_confirmation", "pending_run"):
-                        st.session_state.pop(k, None)
-                    if is_local:
-                        st.rerun()
-                    else:
-                        st.logout()
+        shown = [h for h in history if not term or term in json.dumps(h, default=str).casefold()]
+        with st.container(border=False, key="history_sidebar_scroll"):
+            if not shown:
+                html_block('<div class="ta-side-empty">No requests recorded yet.</div>' if not term
+                           else '<div class="ta-side-empty">No matching requests.</div>')
+            items = []
+            for item in shown:
+                sub = " · ".join(p for p in (str(item.get("target") or ""), time_ago(item.get("requested_at"))) if p)
+                items.append(f'<div class="ta-recent" title="{escape(str(item.get("request") or ""))}">'
+                             f'<strong>{escape(_history_title(item))}</strong><span>{escape(sub)}</span></div>')
+            html_block("".join(items))
 
 
 def system_health() -> tuple[bool, list[tuple[str, Any]]]:
@@ -1979,17 +2070,22 @@ def system_health() -> tuple[bool, list[tuple[str, Any]]]:
 
 
 def render_topbar(claims: dict[str, Any]) -> None:
-    _, rows = system_health()
+    healthy, rows = system_health()
     with st.container(key="topbar"):
-        left, help_col, bell_col, me_col = st.columns([12, 0.6, 0.6, 0.6], vertical_alignment="center", gap="small")
+        left, right = st.columns([4, 1], vertical_alignment="center", gap="small")
         with left:
+            badges = "" if healthy else ' <span class="ta-badge warn">Configuration needs attention</span>'
+            if PREVIEW_MODE:
+                badges += ' <span class="ta-badge warn">Preview · sample data</span>'
             html_block(
-                f'<div class="ta-topbar-brand">{operations_icon(40)}<div>'
-                '<div class="name">TechAdmin</div>'
-                '<div class="sub">Autonomous Assistant</div>'
-                '</div></div>'
+                f'<div class="ta-top-brand">{operations_icon(36)}<div><div class="ta-topbar-title">TechAdmin{badges}</div>'
+                '<div class="ta-topbar-sub">Autonomous Assistant</div></div></div>'
             )
-        with help_col:
+            # initials() only yields letters, so it is safe inside a CSS string
+            html_block(f'<style>.st-key-me_menu {{ --ta-initials: "{initials(claims.get("name") or claims.get("preferred_username") or "")}"; }}</style>')
+        actions = right.container(horizontal=True, horizontal_alignment="right", vertical_alignment="center",
+                                  gap="small", wrap=False, key="top_actions")
+        with actions:
             with st.popover(":material/help_outline:", help="Help and system status"):
                 st.markdown("**Try asking**")
                 for i, example in enumerate(EXAMPLES):
@@ -2005,8 +2101,7 @@ def render_topbar(claims: dict[str, Any]) -> None:
                 if isinstance(result, dict):
                     (st.success if result["connected"] else st.error)(result["message"])
                 st.caption(f"Logs: {LOG_FILE}")
-        with bell_col:
-            pending = st.session_state.pending_confirmation
+            pending = st.session_state.get("pending_confirmation")
             with st.popover(":material/notifications:" if not pending else ":material/notifications_active:",
                             help="Notifications"):
                 if isinstance(pending, dict):
@@ -2017,9 +2112,19 @@ def render_topbar(claims: dict[str, Any]) -> None:
                         st.rerun()
                 else:
                     st.caption("You're all caught up. Approvals waiting on you will appear here.")
-        with me_col:
             name = claims.get("name") or claims.get("preferred_username") or "TechAdmin"
-            html_block(f'<div class="ta-top-right"><div class="ta-avatar">{escape(initials(name))}</div></div>')
+            email = claims.get("preferred_username") or claims.get("email") or ""
+            role = ROLE_TITLES.get(str(get_config_status().get("requester_role") or "").casefold(), "Operations admin")
+            dept = access_info().get("department")
+            with st.container(key="me_menu", width="content"):
+                with st.popover(":material/person:", help=str(name)):
+                    html_block(
+                        f'<div class="ta-me-pop"><div class="ta-avatar">{escape(initials(name))}</div><div style="min-width:0">'
+                        f'<strong>{escape(str(name))}</strong><span>{escape(str(email))}</span>'
+                        f'<span>{escape(str(dept or role))}</span></div></div>'
+                    )
+                    if st.button("Sign out", key="top_sign_out_btn", icon=":material/logout:", width="stretch"):
+                        sign_out(claims)
 
 
 # =============================================================================
@@ -2028,10 +2133,9 @@ def render_topbar(claims: dict[str, Any]) -> None:
 
 QUICK_ACTIONS = [
     ("lookup", "Look up a user", ":material/person_search:", "Get user details for {email}"),
-    ("reset", "Reset a password", ":material/key:", "Reset password for {email}"),
     ("unlock", "Unlock an account", ":material/lock_open:", "Unlock account for {email}"),
-    ("investigate", "Investigate failed sign-ins", ":material/policy:",
-     "Investigate failed logins for {email} in the last 24 hours"),
+    ("investigate", "Investigate account lockout", ":material/policy:",
+     "Investigate account lockout for {email} in the last 24 hours"),
 ]
 
 
@@ -2097,7 +2201,7 @@ def page_assistant(claims: dict[str, Any]) -> None:
         if not conversation and not st.session_state.pending_run:
             html_block('<div class="ta-hello"><h3>Quick actions</h3>'
                        '<p>Pick a task, or describe what you need in the box below. Changes always pause for your approval.</p></div>')
-            cols = st.columns(4)
+            cols = st.columns(len(QUICK_ACTIONS))
             for col, (key, title, icon, template) in zip(cols, QUICK_ACTIONS):
                 with col:
                     with st.container(key=f"qa_{key}"):
@@ -2132,22 +2236,23 @@ def page_assistant(claims: dict[str, Any]) -> None:
 
 def page_history(history: list[dict[str, Any]]) -> None:
     with st.container(key="content"):
-        html_block('<div class="ta-page-head"><h1>Request history</h1>'
+        html_block('<div class="ta-page-head"><h1>Your History</h1>'
                    '<p>Your recent identity requests, as recorded in the operation audit log.</p></div>')
-        with st.container(key="hist_card"):
-            rows = ['<div class="ta-hist h"><span>Request</span><span>Target</span><span>Status</span><span>When</span></div>']
-            for item in history:
-                when = item.get("requested_at")
-                when_text = when.astimezone().strftime("%d %b, %H:%M") if isinstance(when, datetime) else time_ago(when)
-                rows.append(
-                    f'<div class="ta-hist"><span class="q" title="{escape(str(item.get("request") or ""))}">'
-                    f'{escape(_history_title(item))}<br><span class="t">{escape(str(item.get("request") or ""))}</span></span>'
-                    f'<span class="t">{escape(str(item.get("target") or "—"))}</span>'
-                    f'<span>{_status_badge(item.get("status"))}</span><span class="t">{escape(when_text)}</span></div>'
-                )
-            if not history:
-                rows.append('<div class="ta-empty" style="padding:22px 16px">No requests recorded yet.</div>')
-            html_block("".join(rows))
+        with st.container(height=520, border=False, key="history_page_scroll"):
+            with st.container(key="hist_card"):
+                rows = ['<div class="ta-hist h"><span>Request</span><span>Target</span><span>Status</span><span>When</span></div>']
+                for item in history:
+                    when = item.get("requested_at")
+                    when_text = when.astimezone().strftime("%d %b, %H:%M") if isinstance(when, datetime) else time_ago(when)
+                    rows.append(
+                        f'<div class="ta-hist"><span class="q" title="{escape(str(item.get("request") or ""))}">'
+                        f'{escape(_history_title(item))}<br><span class="t">{escape(str(item.get("request") or ""))}</span></span>'
+                        f'<span class="t">{escape(str(item.get("target") or "—"))}</span>'
+                        f'<span>{_status_badge(item.get("status"))}</span><span class="t">{escape(when_text)}</span></div>'
+                    )
+                if not history:
+                    rows.append('<div class="ta-empty" style="padding:22px 16px">No requests recorded yet.</div>')
+                html_block("".join(rows))
         st.write("")
         if st.session_state.conversation:
             data = json.dumps(redact_sensitive_history(copy.deepcopy(st.session_state.conversation)),
@@ -2156,61 +2261,50 @@ def page_history(history: list[dict[str, Any]]) -> None:
                                mime="application/json", icon=":material/download:")
 
 
-def page_directory() -> None:
-    with st.container(key="content"):
-        html_block('<div class="ta-page-head"><h1>Directory</h1>'
-                   '<p>Look up an employee to see account health, manager and group memberships. Lookups are read-only.</p></div>')
-        with st.container(key="dir_card"):
-            with st.form("dir_lookup", border=False):
-                c1, c2 = st.columns([4, 1], vertical_alignment="bottom")
-                ident = c1.text_input("Work email or username", placeholder="amit.bhagat@coforge.com")
-                source = st.radio("Source", ["Default", "Active Directory (script)", "Microsoft Entra"], horizontal=True)
-                go = c2.form_submit_button("Look up", type="primary", width="stretch", icon=":material/search:")
-            if go and ident.strip():
-                suffix = {"Active Directory (script)": " via script", "Microsoft Entra": " on Entra"}.get(source, "")
-                queue_run(f"Get user details for {ident.strip()}{suffix}")
-                st.rerun()
-
-        seen: dict[str, dict[str, Any]] = {}
-        for turn in st.session_state.conversation:
-            response = turn.get("content")
-            if turn.get("role") == "assistant" and isinstance(response, dict) and response.get("intent") == "get_user_details":
-                result = (response.get("tool_result") or {}).get("result") if isinstance(response.get("tool_result"), dict) else None
-                if isinstance(result, dict):
-                    user = result.get("user") if isinstance(result.get("user"), dict) else result
-                    seen[response_target(response) or str(len(seen))] = user
-        if seen:
-            html_block('<div class="ta-side-label" style="color:var(--ta-muted);padding:22px 0 8px">Viewed this session</div>')
-            for target, user in reversed(list(seen.items())):
-                name = _ci_get(user, "DisplayName", "Name", "displayName") or target
-                html_block(
-                    f'<div class="ta-group" style="background:#fff;border:1px solid var(--ta-line);border-radius:12px;margin-bottom:8px;padding:12px 14px">'
-                    f'<div class="ta-avatar">{escape(initials(name))}</div><div style="min-width:0"><div class="nm">{escape(str(name))}</div>'
-                    f'<div class="ds">{escape(str(target))}</div></div>'
-                    f'<span style="margin-left:auto;display:flex;gap:6px">'
-                    + ('<span class="ta-badge bad">Locked</span>' if _optional_boolean(user, "LockedOut") else "")
-                    + ('<span class="ta-badge bad">Disabled</span>' if _optional_boolean(user, "Enabled", "AccountEnabled") is False
-                       else '<span class="ta-badge ok">Enabled</span>')
-                    + '</span></div>'
-                )
-
-
 # =============================================================================
 # Main
 # =============================================================================
+
+def open_sidebar_once() -> None:
+    """Expand the sidebar the first time the workspace renders after sign-in."""
+    if st.session_state.get("sidebar_opened_once"):
+        return
+    st.session_state.sidebar_opened_once = True
+    import streamlit.components.v1 as components
+
+    with st.container(key="sidebar_opener"):
+        components.html(
+            """<script>
+            (() => {
+              const doc = window.parent.document;
+              let tries = 0;
+              const timer = setInterval(() => {
+                const side = doc.querySelector('section[data-testid="stSidebar"]');
+                const btn = doc.querySelector('[data-testid="stExpandSidebarButton"]');
+                if (side && side.getAttribute('aria-expanded') === 'true') { clearInterval(timer); return; }
+                if (btn) { btn.click(); clearInterval(timer); return; }
+                if (++tries > 40) clearInterval(timer);
+              }, 100);
+            })();
+            </script>""",
+            height=0,
+        )
+
 
 def main() -> None:
     init_state()
     claims = require_authentication()
     inject_app_css()
+    inject_workspace_layout_css()
     history = request_history()
+    if st.session_state.page not in {key for key, _, _ in PAGES}:
+        st.session_state.page = "assistant"
     page = st.session_state.page
-    render_sidebar(claims, history)
+    render_sidebar(history)
     render_topbar(claims)
+    open_sidebar_once()
     if page == "history":
         page_history(history)
-    elif page == "directory":
-        page_directory()
     else:
         page_assistant(claims)
 

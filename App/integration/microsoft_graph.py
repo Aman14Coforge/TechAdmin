@@ -580,6 +580,7 @@ class MicrosoftGraphClient:
             "PasswordNeverExpires": (
                 "DisablePasswordExpiration" in policies
             ),
+            "PasswordExpiryDate": None,
             "CannotChangePassword": None,
             "PasswordNotRequired": None,
             "AccountExpirationDate": None,
@@ -656,6 +657,7 @@ class MicrosoftGraphClient:
                 "BadPasswordCount",
                 "LastBadPasswordAttempt",
                 "PasswordExpired",
+                "PasswordExpiryDate",
                 "CanonicalName",
                 "PrimaryGroupName",
                 "Exact nested-group inheritance path",
