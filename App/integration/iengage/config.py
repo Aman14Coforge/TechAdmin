@@ -1,37 +1,80 @@
+"""Environment configuration for the TechAdmin iEngage integration."""
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+
+ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 TRUE_VALUES = {"1", "true", "yes", "y", "on"}
+FALSE_VALUES = {"0", "false", "no", "n", "off"}
 
 
 def get_text(name: str, default: str = "") -> str:
+    """Return one trimmed environment variable."""
     value = os.getenv(name)
     return default if value is None else value.strip()
 
 
 def get_boolean(name: str, default: bool) -> bool:
+    """Read a Boolean environment variable using strict accepted values."""
     value = os.getenv(name)
-    return default if value is None else value.strip().lower() in TRUE_VALUES
+    if value is None:
+        return default
+
+    normalized = value.strip().casefold()
+    if normalized in TRUE_VALUES:
+        return True
+    if normalized in FALSE_VALUES:
+        return False
+
+    accepted = ", ".join(sorted(TRUE_VALUES | FALSE_VALUES))
+    raise ValueError(
+        f"{name} must be one of: {accepted}. Received: {value!r}"
+    )
 
 
 def get_integer(name: str, default: int) -> int:
+    """Read a positive or negative whole-number environment variable."""
     value = get_text(name)
     if not value:
         return default
+
     try:
         return int(value)
     except ValueError as exc:
-        raise ValueError(f"{name} must be a whole number. Received: {value!r}") from exc
+        raise ValueError(
+            f"{name} must be a whole number. Received: {value!r}"
+        ) from exc
 
 
 def get_csv(name: str, default: str) -> tuple[str, ...]:
-    return tuple(item.strip() for item in get_text(name, default).split(",") if item.strip())
+    """Read a comma-separated environment variable."""
+    return tuple(
+        item.strip()
+        for item in get_text(name, default).split(",")
+        if item.strip()
+    )
+
+
+def mask_value(value: Any) -> str:
+    """Mask a secret while retaining minimal diagnostic context."""
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return "***"
+    return f"{text[:2]}***{text[-2:]}"
 
 
 @dataclass(frozen=True)
 class IEngageConfig:
+    """Immutable configuration for the iEngage ticket integration."""
+
     enabled: bool
     dry_run: bool
     url: str
@@ -68,9 +111,12 @@ class IEngageConfig:
     ticket_id_fields: tuple[str, ...]
     success_markers: tuple[str, ...]
     failure_markers: tuple[str, ...]
+    description_max_length: int = 1000
 
     @classmethod
     def from_env(cls) -> "IEngageConfig":
+        """Load project defaults while preserving explicitly supplied environment values."""
+        load_dotenv(ENV_FILE, override=False)
         config = cls(
             enabled=get_boolean("IENGAGE_ENABLED", False),
             dry_run=get_boolean("IENGAGE_DRY_RUN", True),
@@ -83,7 +129,10 @@ class IEngageConfig:
             requester_mobile=get_text("IENGAGE_REQUESTER_MOBILE"),
             requester_project_code=get_text("IENGAGE_REQUESTER_PROJECT_CODE"),
             request_type=get_text("IENGAGE_REQUEST_TYPE"),
-            priority_name=get_text("IENGAGE_PRIORITY_NAME", "Low (A single user is impacted)"),
+            priority_name=get_text(
+                "IENGAGE_PRIORITY_NAME",
+                "Low (A single user is impacted)",
+            ),
             location_name=get_text("IENGAGE_LOCATION_NAME"),
             category_id=get_text("IENGAGE_CATEGORY_ID"),
             subcategory_id=get_text("IENGAGE_SUBCATEGORY_ID"),
@@ -107,31 +156,68 @@ class IEngageConfig:
             verify_ssl=get_boolean("IENGAGE_VERIFY_SSL", True),
             ticket_id_fields=get_csv(
                 "IENGAGE_TICKET_ID_FIELDS",
-                "RequestID,RequestNo,ServiceRequestNo,ticketNumber,ticketNo,incidentNumber,id",
+                (
+                    "RequestID,RequestId,request_id,RequestNo,RequestNumber,"
+                    "requestNumber,ServiceRequestNo,ServiceRequestNumber,"
+                    "TicketID,TicketId,ticket_id,ticketNumber,ticketNo,"
+                    "IncidentID,IncidentId,incident_id,IncidentNo,"
+                    "IncidentNumber,incidentNumber,CaseID,CaseNumber,"
+                    "SRNumber,INCNumber"
+                ),
             ),
             success_markers=get_csv(
                 "IENGAGE_SUCCESS_MARKERS",
-                "saved successfully,request created,incident created,ticket created",
+                (
+                    "saved successfully,created successfully,"
+                    "submitted successfully,request created,"
+                    "request submitted,incident created,ticket created,success"
+                ),
             ),
             failure_markers=get_csv(
                 "IENGAGE_FAILURE_MARKERS",
-                "exception thrown,insert fails,cannot insert,error,failed,invalid",
+                (
+                    "exception thrown,insert fails,cannot insert,"
+                    "unable to create,request failed,invalid request,"
+                    "validation failed"
+                ),
             ),
+            description_max_length=get_integer("IENGAGE_DESCRIPTION_MAX_LENGTH", 1000),
         )
         config.validate()
         return config
 
     def validate(self) -> None:
-        if not self.url:
+        """Validate all values required by the selected execution mode."""
+        if self.enabled and not self.url:
             raise ValueError("IENGAGE_URL is missing.")
-        if not self.url.startswith(("http://", "https://")):
+
+        if self.url and not self.url.startswith(("http://", "https://")):
             raise ValueError("IENGAGE_URL must be a plain HTTP/HTTPS URL.")
-        if "<a " in self.url or "</a>" in self.url:
-            raise ValueError("IENGAGE_URL contains HTML. Store only the plain URL in .env.")
+
+        normalized_url = self.url.casefold()
+        if any(
+            marker in normalized_url
+            for marker in ("<a ", "</a>", "&lt;a ", "&lt;/a&gt;")
+        ):
+            raise ValueError(
+                "IENGAGE_URL contains HTML. Store only the plain URL in .env."
+            )
+
         if self.timeout_seconds <= 0:
-            raise ValueError("IENGAGE_TIMEOUT_SECONDS must be greater than zero.")
+            raise ValueError(
+                "IENGAGE_TIMEOUT_SECONDS must be greater than zero."
+            )
+        if self.description_max_length < 100:
+            raise ValueError("IENGAGE_DESCRIPTION_MAX_LENGTH must be at least 100.")
+
+        if not self.ticket_id_fields:
+            raise ValueError(
+                "At least one iEngage ticket ID field must be configured."
+            )
+
         if not self.enabled or self.dry_run:
             return
+
         required = {
             "IENGAGE_ECSERP": self.ecserp,
             "IENGAGE_AUTH_KEY": self.auth_key,
@@ -144,6 +230,36 @@ class IEngageConfig:
             "IENGAGE_PRIORITY_ID": self.priority_id,
             "IENGAGE_LOCATION_ID": self.location_id,
         }
-        missing = [name for name, value in required.items() if not value]
+
+        missing = [
+            name
+            for name, value in required.items()
+            if not str(value or "").strip()
+        ]
         if missing:
-            raise ValueError("Live ticket creation is blocked. Missing configuration: " + ", ".join(missing))
+            raise ValueError(
+                "Live ticket creation is blocked. Missing configuration: "
+                + ", ".join(missing)
+            )
+
+    def safe_summary(self) -> dict[str, Any]:
+        """Return non-sensitive diagnostics for startup checks and logs."""
+        return {
+            "enabled": self.enabled,
+            "dry_run": self.dry_run,
+            "url": self.url,
+            "ecserp": mask_value(self.ecserp),
+            "auth_key": mask_value(self.auth_key),
+            "requester_code": self.requester_code,
+            "emp_code": self.emp_code,
+            "request_type": self.request_type,
+            "category_id": self.category_id,
+            "subcategory_id": self.subcategory_id,
+            "priority_id": self.priority_id,
+            "location_id": self.location_id,
+            "timeout_seconds": self.timeout_seconds,
+            "verify_ssl": self.verify_ssl,
+            "ticket_id_fields": list(self.ticket_id_fields),
+            "success_markers": list(self.success_markers),
+            "failure_markers": list(self.failure_markers),
+        }

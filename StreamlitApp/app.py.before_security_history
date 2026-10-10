@@ -875,7 +875,6 @@ from __future__ import annotations
 import copy
 import hmac
 import json
-import logging
 import os
 import re
 import time
@@ -929,7 +928,6 @@ else:
     )
     from App.db.login_authorization import authorize_claims, extract_display_name  # noqa: E402
     from App.db.operation_audit import get_user_request_history  # noqa: E402
-    from App.services.patch.security_history import get_security_query_history  # noqa: E402
 
 from investigation_report_ui import (
     render_investigation_report,
@@ -995,50 +993,21 @@ inject_base_css()
 def html_block(markup: str) -> None:
     st.markdown(markup, unsafe_allow_html=True)
 
+
 def inject_workspace_layout_css() -> None:
-    st.markdown(
-        """
+        st.markdown("""
         <style>
-            .st-key-content,
-            .st-key-security_content {
-                max-width: min(
-                    1000px,
-                    100%
-                ) !important;
-                width: 100%;
-                margin-left: auto;
-                margin-right: auto;
-            }
-
-            .st-key-history_sidebar_scroll,
-            .st-key-history_page_scroll {
-                overscroll-behavior: contain;
-                scrollbar-gutter: stable;
-            }
-
-            .st-key-history_page_scroll {
-                width: 100%;
-            }
-
-            .st-key-history_sidebar_scroll
-           ::-webkit-scrollbar,
-            .st-key-history_page_scroll
-           ::-webkit-scrollbar {
-                width: 7px;
-            }
-
-            .st-key-history_sidebar_scroll
-           ::-webkit-scrollbar-thumb,
-            .st-key-history_page_scroll
-           ::-webkit-scrollbar-thumb {
-                background:
-                    rgba(120, 135, 155, .45);
-                border-radius: 8px;
-            }
+            .st-key-content { max-width: min(1000px, 100%) !important; width:100%; }
+            .st-key-history_sidebar_scroll, .st-key-history_page_scroll {
+                overscroll-behavior:contain; scrollbar-gutter:stable; }
+            .st-key-history_page_scroll { width:100%; }
+            .st-key-history_sidebar_scroll::-webkit-scrollbar, .st-key-history_page_scroll::-webkit-scrollbar { width:7px; }
+            .st-key-history_sidebar_scroll::-webkit-scrollbar-thumb, .st-key-history_page_scroll::-webkit-scrollbar-thumb {
+                background:rgba(120,135,155,.45); border-radius:8px; }
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
+        """, unsafe_allow_html=True)
+
+
 # =============================================================================
 # Constants
 # =============================================================================
@@ -2056,38 +2025,12 @@ def render_user_turn(turn: dict[str, Any], claims: dict[str, Any]) -> None:
 # =============================================================================
 
 def request_history(limit: int = 20) -> list[dict[str, Any]]:
-    access = access_info()
-    user_id = access.get("user_id")
-    requester_id = user_id or access.get("user_principal_name")
-
-    if requester_id:
-        identity_items: list[dict[str, Any]] = []
-        security_items: list[dict[str, Any]] = []
-
-        if user_id:
-            try:
-                identity_items = get_user_request_history(
-                    user_id,
-                    limit=limit,
-                )
-            except Exception:
-                identity_items = []
-
-        if not PREVIEW_MODE:
-            try:
-                security_items = get_security_query_history(
-                    str(requester_id),
-                    limit=limit,
-                )
-            except Exception:
-                security_items = []
-
-        combined = identity_items + security_items
-        combined.sort(
-            key=lambda item: item.get("requested_at") or datetime.min,
-            reverse=True,
-        )
-        return combined[:limit]
+    user_id = access_info().get("user_id")
+    if user_id:
+        try:
+            return get_user_request_history(user_id, limit=limit)
+        except Exception:
+            return []
     # identities without an app_users row: fall back to this browser session
     items = []
     for turn in reversed(st.session_state.conversation):
@@ -2593,18 +2536,9 @@ def open_sidebar_once() -> None:
             </script>""",
             height=0,
         )
+
 def main() -> None:
     init_state()
-
-    if not PREVIEW_MODE:
-        try:
-            from App.services.patch.bootstrap import start_patch_background_services
-
-            start_patch_background_services()
-        except Exception:
-            logging.getLogger(__name__).exception(
-                "Could not start the embedded patch scheduler."
-            )
 
     claims = require_authentication()
 
@@ -2618,29 +2552,28 @@ def main() -> None:
         for key, _, _ in PAGES
     }
 
-    current_page = st.session_state.get(
-        "page",
-        "assistant",
-    )
-
-    if current_page not in valid_pages:
-        current_page = "assistant"
+    if (
+        st.session_state.page
+        not in valid_pages
+    ):
         st.session_state.page = "assistant"
+
+    page = st.session_state.page
 
     render_sidebar(history)
     render_topbar(claims)
 
-    # Keep this only if the automatic sidebar expansion
-    # is required. It generates a Streamlit deprecation warning.
+    # You may keep this if automatic sidebar expansion
+    # is still required. It produces a Streamlit
+    # deprecation warning.
     open_sidebar_once()
 
-    if current_page == "history":
+    if page == "history":
         page_history(history)
-        return
 
-    if current_page == "security":
-        if PREVIEW_MODE:
-            with st.container(key="content"):
+    elif page == "security":
+        with st.container(key="content"):
+            if PREVIEW_MODE:
                 html_block(
                     '<div class="ta-page-head">'
                     '<h1>Security Agent</h1>'
@@ -2656,43 +2589,33 @@ def main() -> None:
                     "TECHADMIN_UI_PREVIEW mode."
                 )
 
-            return
-
-        if render_patch_agent_page is None:
-            with st.container(key="content"):
-                st.error(
-                    "Security Agent could not be loaded."
+            elif render_patch_agent_page is not None:
+                redirected = st.session_state.pop(
+                    "security_redirect_query",
+                    None,
                 )
 
-            return
+                if redirected:
+                    st.info(
+                        "This request belongs to the "
+                        "Security Agent. TechAdmin moved "
+                        "it here without executing it as "
+                        "an Identity Agent operation."
+                    )
 
-        redirected = st.session_state.pop(
-            "security_redirect_query",
-            None,
-        )
+                    st.session_state[
+                        "patch_query_prefill"
+                    ] = redirected
 
-        if redirected:
-            st.session_state[
-                "patch_query_prefill"
-            ] = redirected
+                render_patch_agent_page(
+                    claims,
+                    access_info(),
+                )
 
-            st.session_state[
-                "security_redirect_notice"
-            ] = True
-
-        render_patch_agent_page(
-            claims,
-            access_info(),
-        )
-
-        return
-
-    # Identity Agent is the default page.
-    page_assistant(claims)
+    else:
+        page_assistant(claims)
 
 
 if __name__ == "__main__":
     main()
-
-
 

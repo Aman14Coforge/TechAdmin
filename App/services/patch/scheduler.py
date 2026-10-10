@@ -30,7 +30,8 @@ def _run(source:str):
         acquired=bool(connection.execute(text("SELECT pg_try_advisory_lock(:key)"),{"key":settings.scan_lock_key}).scalar_one())
         if not acquired:return {"status":"SKIPPED_LOCKED","source":source}
         try:
-            result=PatchService().scan();result.update({"status":"COMPLETED","source":source,"preflight":preflight});_LAST_RESULT=result;_LAST_ERROR=None;return result
+            local_day=datetime.now(ZoneInfo(settings.scheduler_timezone)).date()
+            result=PatchService().scan(scan_date=local_day,source=source);result.update({"status":"COMPLETED","source":source,"preflight":preflight});_LAST_RESULT=result;_LAST_ERROR=None;return result
         except Exception as exc:_LAST_ERROR=f"{type(exc).__name__}: {exc}";logger.exception("PATCH_SCAN_FAILED");raise
         finally:connection.execute(text("SELECT pg_advisory_unlock(:key)"),{"key":settings.scan_lock_key})
 
@@ -53,4 +54,4 @@ def shutdown_patch_scheduler():
 
 def scheduler_status():
     job=_SCHEDULER.get_job("ivanti_daily_patch_scan") if _SCHEDULER else None
-    return {"enabled":settings.scheduler_enabled,"running":bool(_SCHEDULER and _SCHEDULER.running),"next_run_time":job.next_run_time.isoformat() if job and job.next_run_time else None,"last_result":_LAST_RESULT,"last_error":_LAST_ERROR,"preflight":_preflight()}
+    return {"enabled":settings.scheduler_enabled,"running":bool(_SCHEDULER and _SCHEDULER.running),"timezone":settings.scheduler_timezone,"scheduled_time":f"{settings.scheduler_hour:02d}:{settings.scheduler_minute:02d}","run_on_startup":settings.scheduler_run_on_startup,"auto_ticket_enabled":settings.auto_ticket,"ticket_eligibility_days":settings.days,"max_automatic_tickets_per_scan":settings.max_auto_per_run,"next_run_time":job.next_run_time.isoformat() if job and job.next_run_time else None,"last_result":_LAST_RESULT,"last_error":_LAST_ERROR,"preflight":_preflight()}

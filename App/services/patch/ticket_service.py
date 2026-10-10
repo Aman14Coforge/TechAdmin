@@ -1,124 +1,65 @@
+"""Patch ticket orchestration with safe retry and episode-level deduplication."""
 from __future__ import annotations
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime,timezone
 from typing import Any
 from sqlalchemy import select
 from App.db.connection import SessionLocal
-from App.db.models.patch_compliance import PatchDeviceState, PatchFinding, PatchTicket
-from App.integration.iengage.client import IEngageClient
-from App.integration.iengage.config import settings
+from App.db.models.patch_compliance import PatchDeviceObservation,PatchDeviceState,PatchFinding,PatchTicket
+from App.integration.iengage.config import IEngageConfig
+from App.integration.iengage.models import PatchTicketInput
+from App.integration.iengage.ticket_service import PatchTicketService as IEngagePatchTicketService
 
+FINAL_LIVE_STATUSES={"CREATED","ACCEPTED"}
+RETRYABLE_STATUSES={"FAILED","DRY_RUN"}
 
 class PatchTicketService:
-    def __init__(self, client: IEngageClient | None = None) -> None:
-        self.client=client or IEngageClient()
-
+    def __init__(self)->None:
+        self.config=IEngageConfig.from_env();self.integration=IEngagePatchTicketService(config=self.config)
     @staticmethod
-    def _description(state: PatchDeviceState, findings: list[PatchFinding], reason: str | None) -> str:
-        confirmed=[f for f in findings if f.evidence_type == "CONFIRMED_MISSING"]
-        lines=[
-            reason or "Persistent Ivanti patch non-compliance detected by TechAdmin.",
-            f"Device: {state.device_name}",
-            f"Discovery ID: {state.discovery_id}",
-            f"Missing patch count: {state.missing_patch_count}",
-            f"Consecutive non-compliant days: {state.consecutive_days}",
-            f"Risk score: {state.risk_score if state.risk_score is not None else 'Unavailable'}",
-            "Confirmed missing patches:",
-        ]
-        for finding in confirmed[:50]:
-            lines.append(f"- {finding.patch_name or 'Unnamed patch'} | {finding.kb_number or 'No KB'} | severity={finding.severity}")
-        if len(confirmed) > 50:
-            lines.append(f"- ... and {len(confirmed)-50} additional confirmed findings")
-        return "\n".join(lines)[:12000]
-
-    def raise_for_device(self, device_name: str, *, reason: str | None = None, mode: str = "USER") -> dict[str, Any]:
-        normalized=(device_name or "").strip()
-        if not normalized:
-            raise ValueError("Device name is required.")
+    def _run(coro):
+        try:asyncio.get_running_loop()
+        except RuntimeError:return asyncio.run(coro)
+        raise RuntimeError("Use the synchronous patch service outside an active event loop.")
+    def raise_for_device(self,device_name:str,*,reason:str|None=None,mode:str="USER",requested_by:str|None=None)->dict[str,Any]:
+        name=(device_name or "").strip()
+        if not name:raise ValueError("Device name is required.")
         with SessionLocal() as db:
-            state=db.scalar(select(PatchDeviceState).where(
-                PatchDeviceState.is_active.is_(True),
-                PatchDeviceState.device_name.ilike(normalized),
-            ))
-            if state is None:
-                raise ValueError("No active patch non-compliance state was found for this device.")
-            existing=db.scalar(select(PatchTicket).where(
-                PatchTicket.discovery_id == state.discovery_id,
-                PatchTicket.episode_first_seen == state.first_seen_date,
-            ))
-            if existing is not None:
-                return {"success": True, "status": "ALREADY_EXISTS", "ticket_id": existing.external_ticket_id}
-
-            findings=list(db.scalars(select(PatchFinding).where(
-                PatchFinding.discovery_id == state.discovery_id,
-                PatchFinding.scan_date == state.last_seen_date,
-            )).all())
-            details={
-                "RequestID": "",
-                "RequesterCode": settings.requester_code,
-                "EmpCode": settings.employee_code,
-                "RequesterMobile": settings.requester_mobile,
-                "RequesterProjectCode": settings.requester_project_code,
-                "RequestType": settings.request_type,
-                "RequestPriorityName": settings.priority_name,
-                "RequesterLocationName": settings.location_name,
-                "RequestCategoryId": settings.category_id,
-                "RequestSubCategoryId": settings.subcategory_id,
-                "RequestPriorityId": settings.priority_id,
-                "RequesterLocationId": settings.location_id,
-                "OtherLocation": "",
-                "RequesterSeatNo": "",
-                "RequesterIP": "",
-                "RequesterAssetCode": state.device_name,
-                "RequestDescription": self._description(state, findings, reason),
-                "RequestDurationId": "",
-                "DurationFromDate": "",
-                "DurationToDate": "",
-                "ManagerID": "",
-                "ReviewingManagerID": "",
-                "isMgrOnLeave": "",
-                "isSave": True,
-                "SmBand": "",
-                "Witness": "",
-                "ThirdWitness": "",
-                "IncidentDate": datetime.now(timezone.utc).isoformat(),
-                "SoftwareIds": "",
-            }
-            result=self.client.create_ticket(details)
-            status=result["status"]
-            ticket=PatchTicket(
-                discovery_id=state.discovery_id,
-                device_name=state.device_name,
-                episode_first_seen=state.first_seen_date,
-                request_mode=mode,
-                status=status,
-                external_ticket_id=result.get("ticket_id"),
-                request_payload={
-                    "RequesterAssetCode": state.device_name,
-                    "RequestDescription": details["RequestDescription"],
-                    "RequestType": settings.request_type,
-                    "category_id": settings.category_id,
-                    "subcategory_id": settings.subcategory_id,
-                },
-                response_summary=result.get("response_summary"),
+            state=db.scalar(select(PatchDeviceState).where(PatchDeviceState.is_active.is_(True),PatchDeviceState.device_name.ilike(name)))
+            if state is None:raise ValueError("No active patch non-compliance state was found for this device.")
+            existing=db.scalar(select(PatchTicket).where(PatchTicket.discovery_id==state.discovery_id,PatchTicket.episode_first_seen==state.first_seen_date).order_by(PatchTicket.ticket_row_id.desc()))
+            if existing and existing.status in {"CREATING", "REVIEW_REQUIRED"}:
+                return {"success":False,"status":existing.status,"ticket_id":existing.external_ticket_id,"message":"A ticket request is in progress or its outcome is uncertain. Check iEngage before retrying to avoid a duplicate.","device_name":state.device_name,"dry_run":False,"sent":True}
+            if existing and existing.status in FINAL_LIVE_STATUSES:
+                message = (f"An active remediation ticket already exists: {existing.external_ticket_id}."
+                           if existing.external_ticket_id else
+                           "iEngage already accepted this ticket request without returning a reference. Check iEngage before resubmitting.")
+                return {"success":True,"status":"ALREADY_EXISTS","ticket_id":existing.external_ticket_id,"message":message,"device_name":state.device_name,"dry_run":False,"sent":True}
+            # A historical dry-run must never block a current live request.
+            if existing and existing.status=="DRY_RUN" and self.config.dry_run:
+                return {"success":True,"status":"DRY_RUN","ticket_id":existing.external_ticket_id or "DRY-RUN","message":"A dry-run record already exists for this active episode.","device_name":state.device_name,"dry_run":True,"sent":False}
+            findings=list(db.scalars(select(PatchFinding).where(PatchFinding.discovery_id==state.discovery_id,PatchFinding.scan_date==state.last_seen_date,PatchFinding.evidence_type=="CONFIRMED_MISSING")).all())
+            obs=db.scalar(select(PatchDeviceObservation).where(PatchDeviceObservation.discovery_id==state.discovery_id,PatchDeviceObservation.scan_date==state.last_seen_date))
+            if existing and existing.status in RETRYABLE_STATUSES:
+                row=existing;row.status="CREATING";row.attempt_count=(row.attempt_count or 0)+1;row.requested_by=requested_by;row.request_mode=mode;row.request_payload={"reason":reason,"retry":True};row.external_ticket_id=None;row.error_message=None;row.response_summary=None
+            else:
+                row=PatchTicket(discovery_id=state.discovery_id,device_name=state.device_name,episode_first_seen=state.first_seen_date,request_mode=mode,requested_by=requested_by,status="CREATING",attempt_count=1,request_payload={"reason":reason})
+                db.add(row)
+            state.ticket_status="CREATING";state.ticket_reference=None;state.ticket_created_at=None;db.commit();db.refresh(row);row_id=row.ticket_row_id
+            input_data=PatchTicketInput(device_name=state.device_name,missing_patch_count=state.missing_patch_count,missing_patch_names=[f.patch_name for f in findings if f.patch_name],consecutive_non_compliant_days=state.consecutive_days,discovery_id=state.discovery_id,operating_system=obs.os_name if obs else None,ip_address=obs.ip_address if obs else None,triggered_by=requested_by or "TechAdmin",trigger_type=mode,additional_description=reason)
+        result=self._run(self.integration.create_patch_ticket(input_data))
+        status="DRY_RUN" if result.dry_run else "CREATED" if result.success and result.ticket_id else "ACCEPTED" if result.success else "FAILED"
+        if not result.success and result.sent and (
+            result.status_code is None or (
+                200 <= result.status_code < 300 and "application error" not in result.message
             )
-            db.add(ticket)
-            state.ticket_status=status
-            state.ticket_reference=result.get("ticket_id")
-            db.commit()
-            return result
-
-    def raise_eligible_automatic_tickets(self, minimum_days: int) -> list[dict[str, Any]]:
+        ):
+            status = "REVIEW_REQUIRED"
+        completed=datetime.now(timezone.utc)
         with SessionLocal() as db:
-            names=list(db.scalars(select(PatchDeviceState.device_name).where(
-                PatchDeviceState.is_active.is_(True),
-                PatchDeviceState.missing_patch_count > 0,
-                PatchDeviceState.consecutive_days >= minimum_days,
-            )).all())
-        results=[]
-        for name in names:
-            results.append({"device_name": name, **self.raise_for_device(
-                name,
-                reason=f"Automatic remediation ticket after {minimum_days} consecutive daily observations.",
-                mode="AUTO",
-            )})
-        return results
+            row=db.get(PatchTicket,row_id);state=db.scalar(select(PatchDeviceState).where(PatchDeviceState.discovery_id==input_data.discovery_id))
+            row.status=status;row.external_ticket_id=result.ticket_id;row.response_summary=result.message;row.error_message=None if result.success else result.message;row.completed_at=completed
+            if state:
+                state.ticket_status=status;state.ticket_reference=result.ticket_id;state.ticket_created_at=completed if result.success else None
+            db.commit()
+        return {"success":result.success,"status":status,"ticket_id":result.ticket_id,"message":result.message,"device_name":input_data.device_name,"dry_run":result.dry_run,"sent":result.sent,"status_code":result.status_code}

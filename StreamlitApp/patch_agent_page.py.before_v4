@@ -1,0 +1,130 @@
+"""Conversation-first Security Agent with inline tables, reports and audit."""
+from __future__ import annotations
+from datetime import date
+from html import escape
+from typing import Any
+from uuid import uuid4
+import pandas as pd
+import streamlit as st
+from App.services.patch.bulk_ticket_service import PatchBulkTicketService
+from App.services.patch.security_audit import SecurityQueryAudit
+from App.services.patch.security_query_service import SecurityPatchQueryService
+from App.services.patch.security_report_service import SecurityReportService
+from App.services.patch.semantic import PatchSemanticInterpreter
+from App.services.patch.service import PatchService
+from App.services.patch.ticket_service import PatchTicketService
+
+SORT_LABELS={"Missing patches: high to low":"missing_desc","Risk score: high to low":"risk_desc","Days open: high to low":"days_desc","Device name: A to Z":"name_asc"}
+
+def _init():
+    for k,v in {"security_conversation":[],"security_pending":None,"security_selected_device":None}.items():st.session_state.setdefault(k,v)
+def _operator(claims,access):return access.get("user_principal_name") or claims.get("preferred_username") or claims.get("name") or "TechAdmin operator"
+def _requester_id(access):return str(access.get("user_id") or access.get("user_principal_name") or "") or None
+def _append(role,content):st.session_state.security_conversation.append({"id":uuid4().hex,"role":role,"content":content})
+def _head(msg):st.markdown(f'<div class="ta-asst-head"><div class="ta-icon-tile"><span class="material-symbols-rounded">security</span></div><div><div class="who">Security Agent</div><div class="msg">{escape(msg)}</div></div></div>',unsafe_allow_html=True)
+
+def _execute(query,claims,access):
+    q=str(query or "").strip()
+    if not q:return
+    _append("user",q);audit_id=SecurityQueryAudit.start(query=q,requester_id=_requester_id(access),requester_name=_operator(claims,access))
+    parsed=PatchSemanticInterpreter().interpret(q,selected_device=st.session_state.get("security_selected_device"));action=parsed["action"];target=parsed.get("device_name") or parsed.get("patch_query")
+    try:
+        if parsed.get("clarification_question"):
+            _append("assistant",{"type":"clarification","message":parsed["clarification_question"],"audit_id":audit_id});SecurityQueryAudit.finish(audit_id,action=action,target=target,status="NEEDS_INPUT",metadata=parsed);return
+        if action=="redirect_identity":
+            _append("assistant",{"type":"redirect","message":"This request belongs to the Identity Agent.","audit_id":audit_id});SecurityQueryAudit.finish(audit_id,action=action,target=target,status="REDIRECTED",metadata=parsed);return
+        if action=="unsupported_security":
+            _append("assistant",{"type":"message","message":parsed.get("explanation") or "This Security Agent capability is not implemented yet.","audit_id":audit_id});SecurityQueryAudit.finish(audit_id,action=action,target=target,status="NOT_IMPLEMENTED",metadata=parsed);return
+        if parsed.get("needs_confirmation"):
+            st.session_state.security_pending={"query":q,"parsed":parsed,"operator":_operator(claims,access),"audit_id":audit_id};_append("assistant",{"type":"confirmation","message":"Approval is required before this live operation runs.","audit_id":audit_id});SecurityQueryAudit.finish(audit_id,action=action,target=target,status="AWAITING_APPROVAL",metadata=parsed);return
+        if action=="device_report":
+            report=SecurityReportService().device_report(parsed["device_name"]);_append("assistant",{"type":"report","message":f"Comprehensive device report for {report['device_name']}.","report":report,"audit_id":audit_id});SecurityQueryAudit.finish(audit_id,action=action,target=report["device_name"],status="COMPLETED",metadata=parsed,summary=report["summary"]);return
+        if action=="patch_search":
+            report=SecurityReportService().patch_report(parsed.get("patch_query") or q);_append("assistant",{"type":"report","message":f"Patch impact report for {report['patch_query']}.","report":report,"audit_id":audit_id});SecurityQueryAudit.finish(audit_id,action=action,target=report["patch_query"],status="COMPLETED",metadata=parsed,summary=report["summary"]);return
+        if action=="patch_report":
+            svc=SecurityPatchQueryService();latest=svc.latest_snapshot_date();requested=parsed.get("end_date") or parsed.get("start_date");snap=date.fromisoformat(requested) if requested else latest or date.today()
+            payload={"snapshot":snap.isoformat(),"patch_query":None,"search":"","sort":"Missing patches: high to low","page_size":25,"include_resolved":False,"page":1}
+            _append("assistant",{"type":"device_list","message":f"Non-compliant device snapshot for {snap.isoformat()}.","table":payload,"audit_id":audit_id});SecurityQueryAudit.finish(audit_id,action=action,target=snap.isoformat(),status="COMPLETED",metadata=parsed,summary={"snapshot":snap.isoformat()});return
+        _append("assistant",{"type":"message","message":"Please provide more detail for a supported Security Agent operation.","audit_id":audit_id});SecurityQueryAudit.finish(audit_id,action=action,target=target,status="NEEDS_INPUT",metadata=parsed)
+    except Exception as exc:
+        _append("assistant",{"type":"error","message":f"{type(exc).__name__}: {exc}","audit_id":audit_id});SecurityQueryAudit.finish(audit_id,action=action,target=target,status="FAILED",metadata=parsed,error=f"{type(exc).__name__}: {exc}")
+
+def _approve():
+    p=st.session_state.security_pending
+    if not p:return
+    a=p["parsed"]["action"]
+    try:
+        if a=="patch_ticket":r=PatchTicketService().raise_for_device(p["parsed"]["device_name"],reason=p["parsed"].get("reason"),mode="USER",requested_by=p["operator"])
+        elif a=="eligible_ticket_batch":r=PatchBulkTicketService().create_batch(eligible_only=True,requested_by=p["operator"],reason=p["parsed"].get("reason"))
+        elif a=="patch_scan":r=PatchService().scan(source="STREAMLIT_MANUAL")
+        else:raise ValueError("Unsupported approved operation")
+        _append("assistant",{"type":"operation","message":"The approved operation completed.","result":r});SecurityQueryAudit.finish(p["audit_id"],action=a,target=p["parsed"].get("device_name"),status="COMPLETED",metadata=p["parsed"],summary=r)
+    except Exception as exc:_append("assistant",{"type":"error","message":f"{type(exc).__name__}: {exc}"});SecurityQueryAudit.finish(p["audit_id"],action=a,target=p["parsed"].get("device_name"),status="FAILED",metadata=p["parsed"],error=str(exc))
+    st.session_state.security_pending=None
+
+def _report(report,key):
+    svc=SecurityReportService();s=report.get("summary",{});cols=st.columns(min(4,max(1,len(s))))
+    for i,(k,v) in enumerate(list(s.items())[:4]):cols[i].metric(k.replace("_"," ").title(),v if not isinstance(v,dict) else len(v))
+    if report["report_type"]=="device":
+        st.caption(f"Discovery ID: {report['discovery_id']} · Status: {'Active' if report['active'] else 'Resolved'} · Days open: {report['days_open']}")
+        for snap in report["history"]:
+            with st.expander(f"{snap['scan_date']} · {snap['missing_patch_count']} missing patches"):
+                st.caption(f"IP: {snap.get('ip_address') or 'Unavailable'} · OS: {snap.get('os_name') or 'Unavailable'} · Risk: {snap.get('risk_score') if snap.get('risk_score') is not None else 'Unavailable'}")
+                df=pd.DataFrame(snap.get("patches") or []);st.info("No detailed patch rows stored.") if df.empty else st.dataframe(df,hide_index=True,width="stretch")
+    else:
+        df=pd.DataFrame(report.get("devices") or []);st.info("No devices were found for this patch or KB.") if df.empty else st.dataframe(df,hide_index=True,width="stretch")
+    st.markdown("**Recommended operational actions**")
+    for x in report.get("recommended_actions",[]):st.write("• "+x)
+    a,b=st.columns(2);name=(report.get("device_name") or report.get("patch_query") or "security_report").replace("/","_")
+    a.download_button("Download comprehensive HTML report",svc.to_html(report),f"{name}_report.html","text/html",width="stretch",key=f"html_{key}")
+    b.download_button("Download report JSON",svc.to_json(report),f"{name}_report.json","application/json",width="stretch",key=f"json_{key}")
+
+def _device_table(item,claims,access):
+    t=item["table"];key=item["id"]
+    with st.form(f"filters_{key}",border=False):
+        c1,c2,c3,c4=st.columns([2,1.2,1.5,.8]);search=c1.text_input("Search",value=t["search"],key=f"search_{key}");snap=c2.date_input("Snapshot date",date.fromisoformat(t["snapshot"]),max_value=date.today(),key=f"date_{key}");sort=c3.selectbox("Sort",list(SORT_LABELS),index=list(SORT_LABELS).index(t["sort"]),key=f"sort_{key}");size=c4.selectbox("Rows",[10,25,50,100],index=[10,25,50,100].index(t["page_size"]),key=f"size_{key}");resolved=st.checkbox("Include resolved",value=t["include_resolved"],key=f"resolved_{key}");apply=st.form_submit_button("Apply filters",type="primary")
+    if apply:t.update({"search":search.strip(),"snapshot":snap.isoformat(),"sort":sort,"page_size":size,"include_resolved":resolved,"page":1});st.rerun()
+    data=SecurityPatchQueryService().list_devices(report_date=date.fromisoformat(t["snapshot"]),search=t["search"],sort=SORT_LABELS[t["sort"]],page=t["page"],page_size=t["page_size"],include_resolved=t["include_resolved"],patch_query=t.get("patch_query"))
+    frame=pd.DataFrame([{"Device":r["device_name"],"IP address":r["ip_address"],"Operating system":r["os_name"],"Missing patches":r["missing_patch_count"],"Risk score":r["risk_score"],"Days open":r["consecutive_days"],"Ticket status":r["ticket_status"],"Ticket reference":r["ticket_reference"] or ""} for r in data["rows"]])
+    if frame.empty:st.info("No stored devices match this snapshot and filters.");return
+    event=st.dataframe(frame,hide_index=True,width="stretch",height=430,on_select="rerun",selection_mode="single-row",key=f"table_{key}")
+    rows=list(event.selection.rows) if event and hasattr(event,"selection") else []
+    selected=str(frame.iloc[rows[0]]["Device"]) if rows else None
+    p1,p2,p3=st.columns([1,2,1])
+    if p1.button("Previous",disabled=t["page"]<=1,key=f"prev_{key}"):t["page"]-=1;st.rerun()
+    p2.markdown(f"<div style='text-align:center'>Page <b>{data['page']}</b> of <b>{data['pages']}</b> · {data['total']} devices</div>",unsafe_allow_html=True)
+    if p3.button("Next",disabled=t["page"]>=data["pages"],key=f"next_{key}"):t["page"]+=1;st.rerun()
+    if selected:
+        st.session_state.security_selected_device=selected;st.caption(f"Selected device: {selected}");a,b,c=st.columns(3)
+        if a.button("View missing patches",type="primary",key=f"view_{key}"):
+            try:r=SecurityReportService().device_report(selected);_append("assistant",{"type":"report","message":f"Comprehensive device report for {selected}.","report":r});st.rerun()
+            except Exception as exc:st.error(str(exc))
+        if b.button("Generate device report",key=f"report_{key}"):
+            try:r=SecurityReportService().device_report(selected);_append("assistant",{"type":"report","message":f"Downloadable IT operations report for {selected}.","report":r});st.rerun()
+            except Exception as exc:st.error(str(exc))
+        if c.button("Raise patch ticket",key=f"ticket_{key}"):
+            st.session_state.security_pending={"parsed":{"action":"patch_ticket","device_name":selected,"reason":"Manual ticket requested from Security Agent table."},"operator":_operator(claims,access),"audit_id":item["content"].get("audit_id")};st.rerun()
+
+def _assistant(item,claims,access):
+    c=item["content"];_head(c.get("message") or "Here is the result.");typ=c.get("type")
+    if typ=="device_list":_device_table({"id":item["id"],"content":c,"table":c["table"]},claims,access)
+    elif typ=="report":_report(c["report"],item["id"])
+    elif typ=="error":st.error(c["message"])
+    elif typ=="clarification":st.warning(c["message"])
+    elif typ=="redirect":
+        st.info(c["message"])
+        if st.button("Open Identity Agent",key=f"redirect_{item['id']}"):st.session_state.page="assistant";st.rerun()
+    elif typ=="operation":st.success(c["message"]);st.json(c.get("result") or {})
+
+def render_patch_agent_page(claims:dict[str,Any],access:dict[str,Any])->None:
+    _init();st.markdown('<div class="ta-greet"><h1>Security Agent</h1><p>Ask about endpoint security, Ivanti patch compliance, device history, patch impact, or remediation tickets.</p></div>',unsafe_allow_html=True)
+    if not st.session_state.security_conversation:st.info("Enter a query to begin. No Ivanti or database report runs merely by opening this page.")
+    for item in st.session_state.security_conversation:
+        if item["role"]=="user":st.markdown(f'<div class="ta-user-row"><div class="ta-user-bubble"><div class="meta">You</div><div class="txt">{escape(item["content"])}</div></div></div>',unsafe_allow_html=True)
+        else:_assistant(item,claims,access)
+    if st.session_state.security_pending:
+        st.warning("Approval is required before this live operation runs.");a,b=st.columns(2)
+        if a.button("Approve and run",type="primary",key="security_approve"):_approve();st.rerun()
+        if b.button("Cancel",key="security_cancel"):st.session_state.security_pending=None;_append("assistant",{"type":"message","message":"Cancelled. No changes were made."});st.rerun()
+    prefill=st.session_state.pop("patch_query_prefill",None);query=st.chat_input("Ask the Security Agent about Ivanti or endpoint security…") or prefill
+    if query:_execute(query,claims,access);st.rerun()

@@ -1,0 +1,846 @@
+"""Conversation-first Security Agent with inline tables, reports, and audit."""
+from __future__ import annotations
+
+from datetime import date
+from html import escape
+from typing import Any
+from uuid import uuid4
+
+import pandas as pd
+import streamlit as st
+
+from App.services.patch.bulk_ticket_service import PatchBulkTicketService
+from App.services.patch.security_audit import SecurityQueryAudit
+from App.services.patch.security_query_service import SecurityPatchQueryService
+from App.services.patch.security_report_service import SecurityReportService
+from App.services.patch.semantic import PatchSemanticInterpreter
+from App.services.patch.service import PatchService
+from App.services.patch.ticket_service import PatchTicketService
+
+
+SORT_LABELS = {
+    "Missing patches: high to low": "missing_desc",
+    "Risk score: high to low": "risk_desc",
+    "Days open: high to low": "days_desc",
+    "Device name: A to Z": "name_asc",
+}
+
+
+def _init() -> None:
+    defaults = {
+        "security_conversation": [],
+        "security_pending": None,
+        "security_selected_device": None,
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+
+
+def _new_security_conversation() -> None:
+    st.session_state.security_conversation = []
+    st.session_state.security_pending = None
+    st.session_state.security_selected_device = None
+    st.session_state.pop("patch_query_prefill", None)
+    st.session_state.pop("security_dialog_query", None)
+    st.session_state.pop("security_redirect_notice", None)
+
+
+def _operator(claims: dict[str, Any], access: dict[str, Any]) -> str:
+    return str(
+        access.get("user_principal_name")
+        or claims.get("preferred_username")
+        or claims.get("name")
+        or "TechAdmin operator"
+    )
+
+
+def _requester_id(access: dict[str, Any]) -> str | None:
+    value = access.get("user_id") or access.get("user_principal_name")
+    return str(value) if value else None
+
+
+def _append(role: str, content: Any) -> None:
+    st.session_state.security_conversation.append(
+        {
+            "id": uuid4().hex,
+            "role": role,
+            "content": content,
+        }
+    )
+
+
+def _head(message: str) -> None:
+    st.markdown(
+        '<div class="ta-asst-head">'
+        '<div class="ta-icon-tile">'
+        '<span class="material-symbols-rounded">security</span>'
+        '</div>'
+        '<div>'
+        '<div class="who">Security Agent</div>'
+        f'<div class="msg">{escape(str(message))}</div>'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _execute(
+    query: str,
+    claims: dict[str, Any],
+    access: dict[str, Any],
+) -> None:
+    normalized = str(query or "").strip()
+    if not normalized:
+        return
+
+    _append("user", normalized)
+
+    audit_id = SecurityQueryAudit.start(
+        query=normalized,
+        requester_id=_requester_id(access),
+        requester_name=_operator(claims, access),
+    )
+
+    parsed = PatchSemanticInterpreter().interpret(
+        normalized,
+        selected_device=st.session_state.get("security_selected_device"),
+    )
+    action = parsed["action"]
+    target = parsed.get("device_name") or parsed.get("patch_query")
+
+    try:
+        if parsed.get("clarification_question"):
+            _append(
+                "assistant",
+                {
+                    "type": "clarification",
+                    "message": parsed["clarification_question"],
+                    "audit_id": audit_id,
+                },
+            )
+            SecurityQueryAudit.finish(
+                audit_id,
+                action=action,
+                target=target,
+                status="NEEDS_INPUT",
+                metadata=parsed,
+            )
+            return
+
+        if action == "redirect_identity":
+            _append(
+                "assistant",
+                {
+                    "type": "redirect",
+                    "message": "This request belongs to the Identity Agent.",
+                    "audit_id": audit_id,
+                },
+            )
+            SecurityQueryAudit.finish(
+                audit_id,
+                action=action,
+                target=target,
+                status="REDIRECTED",
+                metadata=parsed,
+            )
+            return
+
+        if action == "unsupported_security":
+            _append(
+                "assistant",
+                {
+                    "type": "message",
+                    "message": parsed.get("explanation")
+                    or "This Security Agent capability is not implemented yet.",
+                    "audit_id": audit_id,
+                },
+            )
+            SecurityQueryAudit.finish(
+                audit_id,
+                action=action,
+                target=target,
+                status="NOT_IMPLEMENTED",
+                metadata=parsed,
+            )
+            return
+
+        if parsed.get("needs_confirmation"):
+            st.session_state.security_pending = {
+                "query": normalized,
+                "parsed": parsed,
+                "operator": _operator(claims, access),
+                "audit_id": audit_id,
+            }
+            _append(
+                "assistant",
+                {
+                    "type": "confirmation",
+                    "message": "Approval is required before this live operation runs.",
+                    "audit_id": audit_id,
+                },
+            )
+            SecurityQueryAudit.finish(
+                audit_id,
+                action=action,
+                target=target,
+                status="AWAITING_APPROVAL",
+                metadata=parsed,
+            )
+            return
+
+        if action == "device_report":
+            report = SecurityReportService().device_report(parsed["device_name"])
+            _append(
+                "assistant",
+                {
+                    "type": "report",
+                    "message": f"Comprehensive device report for {report['device_name']}.",
+                    "report": report,
+                    "audit_id": audit_id,
+                },
+            )
+            SecurityQueryAudit.finish(
+                audit_id,
+                action=action,
+                target=report["device_name"],
+                status="COMPLETED",
+                metadata=parsed,
+                summary=report["summary"],
+            )
+            return
+
+        if action == "patch_search":
+            report = SecurityReportService().patch_report(
+                parsed.get("patch_query") or normalized
+            )
+            _append(
+                "assistant",
+                {
+                    "type": "report",
+                    "message": f"Patch impact report for {report['patch_query']}.",
+                    "report": report,
+                    "audit_id": audit_id,
+                },
+            )
+            SecurityQueryAudit.finish(
+                audit_id,
+                action=action,
+                target=report["patch_query"],
+                status="COMPLETED",
+                metadata=parsed,
+                summary=report["summary"],
+            )
+            return
+
+        if action == "patch_report":
+            service = SecurityPatchQueryService()
+            latest = service.latest_snapshot_date()
+            requested = parsed.get("end_date") or parsed.get("start_date")
+            snapshot = (
+                date.fromisoformat(requested)
+                if requested
+                else latest or date.today()
+            )
+
+            payload = {
+                "snapshot": snapshot.isoformat(),
+                "patch_query": None,
+                "search": "",
+                "sort": "Missing patches: high to low",
+                "page_size": 25,
+                "include_resolved": False,
+                "page": 1,
+            }
+
+            _append(
+                "assistant",
+                {
+                    "type": "device_list",
+                    "message": f"Non-compliant device snapshot for {snapshot.isoformat()}.",
+                    "table": payload,
+                    "audit_id": audit_id,
+                },
+            )
+            SecurityQueryAudit.finish(
+                audit_id,
+                action=action,
+                target=snapshot.isoformat(),
+                status="COMPLETED",
+                metadata=parsed,
+                summary={"snapshot": snapshot.isoformat()},
+            )
+            return
+
+        _append(
+            "assistant",
+            {
+                "type": "message",
+                "message": "Please provide more detail for a supported Security Agent operation.",
+                "audit_id": audit_id,
+            },
+        )
+        SecurityQueryAudit.finish(
+            audit_id,
+            action=action,
+            target=target,
+            status="NEEDS_INPUT",
+            metadata=parsed,
+        )
+
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        _append(
+            "assistant",
+            {
+                "type": "error",
+                "message": error,
+                "audit_id": audit_id,
+            },
+        )
+        SecurityQueryAudit.finish(
+            audit_id,
+            action=action,
+            target=target,
+            status="FAILED",
+            metadata=parsed,
+            error=error,
+        )
+
+
+def _approve() -> None:
+    pending = st.session_state.security_pending
+    if not isinstance(pending, dict):
+        return
+
+    parsed = pending["parsed"]
+    action = parsed["action"]
+
+    try:
+        if action == "patch_ticket":
+            result = PatchTicketService().raise_for_device(
+                parsed["device_name"],
+                reason=parsed.get("reason"),
+                mode="USER",
+                requested_by=pending["operator"],
+            )
+        elif action == "eligible_ticket_batch":
+            result = PatchBulkTicketService().create_batch(
+                eligible_only=True,
+                requested_by=pending["operator"],
+                reason=parsed.get("reason"),
+            )
+        elif action == "patch_scan":
+            result = PatchService().scan(source="STREAMLIT_MANUAL")
+        else:
+            raise ValueError("Unsupported approved operation")
+
+        _append(
+            "assistant",
+            {
+                "type": "operation",
+                "message": "The approved operation completed.",
+                "result": result,
+            },
+        )
+        SecurityQueryAudit.finish(
+            pending["audit_id"],
+            action=action,
+            target=parsed.get("device_name"),
+            status="COMPLETED",
+            metadata=parsed,
+            summary=result,
+        )
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        _append("assistant", {"type": "error", "message": error})
+        SecurityQueryAudit.finish(
+            pending["audit_id"],
+            action=action,
+            target=parsed.get("device_name"),
+            status="FAILED",
+            metadata=parsed,
+            error=error,
+        )
+
+    st.session_state.security_pending = None
+
+
+def _report(report: dict[str, Any], key: str) -> None:
+    service = SecurityReportService()
+    summary = report.get("summary", {})
+    metrics = st.columns(min(4, max(1, len(summary))))
+
+    for index, (label, value) in enumerate(list(summary.items())[:4]):
+        metrics[index].metric(
+            label.replace("_", " ").title(),
+            value if not isinstance(value, dict) else len(value),
+        )
+
+    if report["report_type"] == "device":
+        st.caption(
+            f"Discovery ID: {report['discovery_id']} · "
+            f"Status: {'Active' if report['active'] else 'Resolved'} · "
+            f"Days open: {report['days_open']}"
+        )
+        for snapshot in report["history"]:
+            with st.expander(
+                f"{snapshot['scan_date']} · "
+                f"{snapshot['missing_patch_count']} missing patches"
+            ):
+                st.caption(
+                    f"IP: {snapshot.get('ip_address') or 'Unavailable'} · "
+                    f"OS: {snapshot.get('os_name') or 'Unavailable'} · "
+                    f"Risk: {snapshot.get('risk_score') if snapshot.get('risk_score') is not None else 'Unavailable'}"
+                )
+                frame = pd.DataFrame(snapshot.get("patches") or [])
+                if frame.empty:
+                    st.info("No detailed patch rows stored.")
+                else:
+                    st.dataframe(frame, hide_index=True, width="stretch")
+    else:
+        frame = pd.DataFrame(report.get("devices") or [])
+        if frame.empty:
+            st.info("No devices were found for this patch or KB.")
+        else:
+            st.dataframe(frame, hide_index=True, width="stretch")
+
+    st.markdown("**Recommended operational actions**")
+    for action in report.get("recommended_actions", []):
+        st.write(f"• {action}")
+
+    left, right = st.columns(2)
+    file_stem = (
+        report.get("device_name")
+        or report.get("patch_query")
+        or "security_report"
+    ).replace("/", "_")
+
+    left.download_button(
+        "Download comprehensive HTML report",
+        service.to_html(report),
+        f"{file_stem}_report.html",
+        "text/html",
+        width="stretch",
+        key=f"html_{key}",
+    )
+    right.download_button(
+        "Download report JSON",
+        service.to_json(report),
+        f"{file_stem}_report.json",
+        "application/json",
+        width="stretch",
+        key=f"json_{key}",
+    )
+
+
+def _device_table(
+    item: dict[str, Any],
+    claims: dict[str, Any],
+    access: dict[str, Any],
+) -> None:
+    table = item["table"]
+    key = item["id"]
+
+    with st.form(f"filters_{key}", border=False):
+        c1, c2, c3, c4 = st.columns([2, 1.2, 1.5, 0.8])
+        search = c1.text_input("Search", value=table["search"], key=f"search_{key}")
+        snapshot = c2.date_input(
+            "Snapshot date",
+            date.fromisoformat(table["snapshot"]),
+            max_value=date.today(),
+            key=f"date_{key}",
+        )
+        sort_label = c3.selectbox(
+            "Sort",
+            list(SORT_LABELS),
+            index=list(SORT_LABELS).index(table["sort"]),
+            key=f"sort_{key}",
+        )
+        page_size = c4.selectbox(
+            "Rows",
+            [10, 25, 50, 100],
+            index=[10, 25, 50, 100].index(table["page_size"]),
+            key=f"size_{key}",
+        )
+        include_resolved = st.checkbox(
+            "Include resolved",
+            value=table["include_resolved"],
+            key=f"resolved_{key}",
+        )
+        apply_filters = st.form_submit_button("Apply filters", type="primary")
+
+    if apply_filters:
+        table.update(
+            {
+                "search": search.strip(),
+                "snapshot": snapshot.isoformat(),
+                "sort": sort_label,
+                "page_size": page_size,
+                "include_resolved": include_resolved,
+                "page": 1,
+            }
+        )
+        st.rerun()
+
+    data = SecurityPatchQueryService().list_devices(
+        report_date=date.fromisoformat(table["snapshot"]),
+        search=table["search"],
+        sort=SORT_LABELS[table["sort"]],
+        page=table["page"],
+        page_size=table["page_size"],
+        include_resolved=table["include_resolved"],
+        patch_query=table.get("patch_query"),
+    )
+
+    frame = pd.DataFrame(
+        [
+            {
+                "Device": row["device_name"],
+                "IP address": row["ip_address"],
+                "Operating system": row["os_name"],
+                "Missing patches": row["missing_patch_count"],
+                "Risk score": row["risk_score"],
+                "Days open": row["consecutive_days"],
+                "Ticket status": row["ticket_status"],
+                "Ticket reference": row["ticket_reference"] or "",
+            }
+            for row in data["rows"]
+        ]
+    )
+
+    if frame.empty:
+        st.info("No stored devices match this snapshot and filters.")
+        return
+
+    event = st.dataframe(
+        frame,
+        hide_index=True,
+        width="stretch",
+        height=430,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"table_{key}",
+    )
+    selected_rows = list(event.selection.rows) if event and hasattr(event, "selection") else []
+    selected = str(frame.iloc[selected_rows[0]]["Device"]) if selected_rows else None
+
+    previous, page_label, next_column = st.columns([1, 2, 1])
+    if previous.button("Previous", disabled=table["page"] <= 1, key=f"prev_{key}"):
+        table["page"] -= 1
+        st.rerun()
+    page_label.markdown(
+        f"<div style='text-align:center'>Page <b>{data['page']}</b> "
+        f"of <b>{data['pages']}</b> · {data['total']} devices</div>",
+        unsafe_allow_html=True,
+    )
+    if next_column.button(
+        "Next", disabled=table["page"] >= data["pages"], key=f"next_{key}"
+    ):
+        table["page"] += 1
+        st.rerun()
+
+    if selected:
+        st.session_state.security_selected_device = selected
+        st.caption(f"Selected device: {selected}")
+        details, report_column, ticket = st.columns(3)
+
+        if details.button("View missing patches", type="primary", key=f"view_{key}"):
+            try:
+                result = SecurityReportService().device_report(selected)
+                item["content"]["active_report"] = result
+                item["content"]["active_report_mode"] = "details"
+                item["content"]["active_device"] = selected
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+
+        if report_column.button("Generate device report", key=f"report_{key}"):
+            try:
+                result = SecurityReportService().device_report(selected)
+                item["content"]["active_report"] = result
+                item["content"]["active_report_mode"] = "download"
+                item["content"]["active_device"] = selected
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+
+        if ticket.button("Raise patch ticket", key=f"ticket_{key}"):
+            st.session_state.security_pending = {
+                "parsed": {
+                    "action": "patch_ticket",
+                    "device_name": selected,
+                    "reason": "Manual ticket requested from Security Agent table.",
+                },
+                "operator": _operator(claims, access),
+                "audit_id": item["content"].get("audit_id"),
+            }
+            st.rerun()
+
+    active_report = item["content"].get("active_report")
+    if isinstance(active_report, dict):
+        st.markdown("---")
+        st.caption(
+            "Current selected device: "
+            + str(item["content"].get("active_device") or "")
+        )
+        _report(active_report, f"active_{key}")
+
+
+def _assistant(
+    item: dict[str, Any],
+    claims: dict[str, Any],
+    access: dict[str, Any],
+) -> None:
+    content = item["content"]
+    _head(content.get("message") or "Here is the result.")
+    item_type = content.get("type")
+
+    if item_type == "device_list":
+        _device_table(
+            {
+                "id": item["id"],
+                "content": content,
+                "table": content["table"],
+            },
+            claims,
+            access,
+        )
+    elif item_type == "report":
+        _report(content["report"], item["id"])
+    elif item_type == "error":
+        st.error(content["message"])
+    elif item_type == "clarification":
+        st.warning(content["message"])
+    elif item_type == "redirect":
+        st.info(content["message"])
+        if st.button("Open Identity Agent", key=f"redirect_{item['id']}"):
+            st.session_state.page = "assistant"
+            st.rerun()
+    elif item_type == "operation":
+        st.success(content["message"])
+        st.json(content.get("result") or {})
+
+
+@st.dialog("Device patch history")
+def security_device_history_dialog() -> None:
+    st.caption(
+        "Enter the device name to review its current and historical missing patches."
+    )
+    with st.form("security_device_history_form", border=False):
+        device_name = st.text_input(
+            "Device name",
+            placeholder="Example: LX-BLR-1X120167",
+            key="security_history_device_name",
+        )
+        submitted = st.form_submit_button(
+            "View patch history", type="primary", width="stretch"
+        )
+
+    if not submitted:
+        return
+
+    normalized = device_name.strip()
+    if not normalized:
+        st.error("Enter a device name.")
+        return
+
+    st.session_state.security_dialog_query = (
+        f"Generate a comprehensive patch history report for device {normalized}"
+    )
+    st.rerun()
+
+
+@st.dialog("Patch or KB impact report")
+def security_patch_report_dialog() -> None:
+    st.caption(
+        "Enter a KB number or patch name to see how many devices are affected."
+    )
+    with st.form("security_patch_report_form", border=False):
+        patch_query = st.text_input(
+            "KB number or patch name",
+            placeholder="Example: KB5030219",
+            key="security_report_patch_query",
+        )
+        submitted = st.form_submit_button(
+            "Generate impact report", type="primary", width="stretch"
+        )
+
+    if not submitted:
+        return
+
+    normalized = patch_query.strip()
+    if not normalized:
+        st.error("Enter a KB number or patch name.")
+        return
+
+    st.session_state.security_dialog_query = (
+        f"Generate a comprehensive patch impact report for {normalized}"
+    )
+    st.rerun()
+
+
+def queue_security_fleet_snapshot() -> None:
+    st.session_state.security_dialog_query = (
+        "Show today's non-compliant devices with missing patch count greater than zero"
+    )
+
+
+def render_patch_agent_page(
+    claims: dict[str, Any],
+    access: dict[str, Any],
+) -> None:
+    """Render the Security Agent workspace."""
+    _init()
+    conversation = st.session_state.security_conversation
+
+    with st.container(key="security_content"):
+        with st.container(key="security_greet_row"):
+            header, action = st.columns([5, 1.45], vertical_alignment="center")
+
+            with header:
+                st.markdown(
+                    '<div class="ta-greet">'
+                    '<h1>Security Agent</h1>'
+                    '<p>Investigate endpoint compliance, device patch history, '
+                    'patch exposure, and remediation actions.</p>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+            with action:
+                with st.container(key="security_new_conversation"):
+                    if st.button(
+                        "New conversation",
+                        icon=":material/add_comment:",
+                        width="stretch",
+                        key="security_new_conversation_button",
+                    ):
+                        _new_security_conversation()
+                        st.rerun()
+
+        if st.session_state.pop("security_redirect_notice", False):
+            st.info(
+                "This request belongs to the Security Agent. TechAdmin moved the "
+                "request here without executing it as an Identity Agent operation."
+            )
+
+        if not conversation:
+            st.markdown(
+                '<div class="ta-hello">'
+                '<h3>Quick actions</h3>'
+                '<p>Choose an operation, or describe the security task in the box below.</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            quick_columns = st.columns(3, gap="medium")
+
+            with quick_columns[0]:
+                with st.container(key="security_quick_fleet"):
+                    if st.button(
+                        "Review patch compliance",
+                        icon=":material/security:",
+                        width="stretch",
+                        key="security_quick_fleet_button",
+                    ):
+                        queue_security_fleet_snapshot()
+                        st.rerun()
+                    st.caption(
+                        "Review the latest non-compliant devices and missing-patch counts."
+                    )
+
+            with quick_columns[1]:
+                with st.container(key="security_quick_device"):
+                    if st.button(
+                        "Device patch history",
+                        icon=":material/computer:",
+                        width="stretch",
+                        key="security_quick_device_button",
+                    ):
+                        security_device_history_dialog()
+                    st.caption(
+                        "Inspect missing patches and daily history for one device."
+                    )
+
+            with quick_columns[2]:
+                with st.container(key="security_quick_patch"):
+                    if st.button(
+                        "Patch impact report",
+                        icon=":material/analytics:",
+                        width="stretch",
+                        key="security_quick_patch_button",
+                    ):
+                        security_patch_report_dialog()
+                    st.caption(
+                        "Find every device affected by a specific patch or KB."
+                    )
+
+        for item in conversation:
+            if item["role"] == "user":
+                st.markdown(
+                    '<div class="ta-user-row">'
+                    '<div class="ta-user-bubble">'
+                    '<div class="meta">You</div>'
+                    f'<div class="txt">{escape(str(item["content"]))}</div>'
+                    '</div>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                _assistant(item, claims, access)
+
+        pending = st.session_state.security_pending
+        if isinstance(pending, dict):
+            with st.container(key="security_approval_card"):
+                st.warning(
+                    "Approval is required before this live Security Agent operation runs."
+                )
+                approve_column, cancel_column = st.columns(2)
+
+                if approve_column.button(
+                    "Approve and run",
+                    type="primary",
+                    width="stretch",
+                    key="security_approve",
+                ):
+                    _approve()
+                    st.rerun()
+
+                if cancel_column.button(
+                    "Cancel", width="stretch", key="security_cancel"
+                ):
+                    audit_id = pending.get("audit_id")
+                    if audit_id:
+                        try:
+                            SecurityQueryAudit.finish(
+                                audit_id,
+                                action=pending.get("parsed", {}).get("action"),
+                                target=pending.get("parsed", {}).get("device_name"),
+                                status="CANCELLED",
+                                metadata=pending.get("parsed"),
+                                summary={"message": "Cancelled by operator."},
+                            )
+                        except Exception:
+                            pass
+
+                    st.session_state.security_pending = None
+                    _append(
+                        "assistant",
+                        {
+                            "type": "message",
+                            "message": "Cancelled. No changes were made.",
+                        },
+                    )
+                    st.rerun()
+
+    redirected_query = st.session_state.pop("patch_query_prefill", None)
+    dialog_query = st.session_state.pop("security_dialog_query", None)
+    typed_query = st.chat_input(
+        "Ask the Security Agent about Ivanti or endpoint security…",
+        key="security_chat_input",
+    )
+    submitted_query = typed_query or redirected_query or dialog_query
+
+    if submitted_query:
+        _execute(submitted_query, claims, access)
+        st.rerun()

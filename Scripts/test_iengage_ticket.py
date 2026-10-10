@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,7 +23,14 @@ from App.integration.iengage.ticket_service import PatchTicketService
 
 
 async def main() -> None:
+    parser = argparse.ArgumentParser(description="Validate iEngage; defaults to a dry run.")
+    parser.add_argument("--live", action="store_true", help="Send a real test ticket to iEngage.")
+    args = parser.parse_args()
     config = IEngageConfig.from_env()
+    print(json.dumps({"configured_enabled": config.enabled, "configured_dry_run": config.dry_run}))
+    if not args.live:
+        config = replace(config, dry_run=True)
+        print("Safety mode: dry run. Use --live only to authorize a real test ticket.")
     print(json.dumps({"enabled": config.enabled, "dry_run": config.dry_run, "url": config.url}, indent=2))
     result = await PatchTicketService(config).create_patch_ticket(PatchTicketInput(
         device_name="TEST-DEVICE-DO-NOT-ACTION",

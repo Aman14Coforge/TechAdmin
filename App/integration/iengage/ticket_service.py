@@ -54,8 +54,7 @@ class PatchTicketService:
             "SoftwareIds": self.config.software_ids,
         }
 
-    @staticmethod
-    def _build_description(item: PatchTicketInput) -> str:
+    def _build_description(self, item: PatchTicketInput) -> str:
         patch_names = list(dict.fromkeys(
             str(value).strip()
             for value in item.missing_patch_names
@@ -66,7 +65,6 @@ class PatchTicketService:
             f"Device name: {item.device_name.strip()}.",
             f"Missing patch count: {item.missing_patch_count}.",
             f"Consecutive non-compliant days: {item.consecutive_non_compliant_days}.",
-            "Missing patches: " + (", ".join(patch_names) if patch_names else "Details unavailable") + ".",
         ]
         if item.discovery_id:
             parts.append(f"Ivanti Discovery ID: {item.discovery_id}.")
@@ -80,7 +78,13 @@ class PatchTicketService:
         parts.append(f"Triggered by: {item.triggered_by}.")
         if item.additional_description:
             parts.append(item.additional_description.strip())
-        return " ".join(parts)
+        parts.append("Missing patches: " + (", ".join(patch_names) if patch_names else "Details unavailable") + ".")
+        text = " ".join(parts)
+        limit = self.config.description_max_length
+        if len(text) > limit:
+            suffix = " ... Full patch evidence is available in TechAdmin for this device."
+            text = text[:limit - len(suffix)].rstrip() + suffix
+        return text
 
     @staticmethod
     def _validate_input(item: PatchTicketInput) -> None:
