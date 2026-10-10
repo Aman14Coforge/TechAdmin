@@ -1,6 +1,7 @@
 """Patch ticket orchestration with safe retry and episode-level deduplication."""
 from __future__ import annotations
 import asyncio
+import json
 from datetime import datetime,timezone
 from typing import Any
 from sqlalchemy import select
@@ -58,8 +59,8 @@ class PatchTicketService:
         completed=datetime.now(timezone.utc)
         with SessionLocal() as db:
             row=db.get(PatchTicket,row_id);state=db.scalar(select(PatchDeviceState).where(PatchDeviceState.discovery_id==input_data.discovery_id))
-            row.status=status;row.external_ticket_id=result.ticket_id;row.response_summary=result.message;row.error_message=None if result.success else result.message;row.completed_at=completed
+            row.status=status;row.external_ticket_id=result.ticket_id;row.response_summary=json.dumps({"message":result.message,"status_code":result.status_code,"response_data":result.response_data},ensure_ascii=False,default=str)[:20000];row.error_message=None if result.success else result.message;row.completed_at=completed
             if state:
                 state.ticket_status=status;state.ticket_reference=result.ticket_id;state.ticket_created_at=completed if result.success else None
             db.commit()
-        return {"success":result.success,"status":status,"ticket_id":result.ticket_id,"message":result.message,"device_name":input_data.device_name,"dry_run":result.dry_run,"sent":result.sent,"status_code":result.status_code}
+        return {"success":result.success,"status":status,"ticket_id":result.ticket_id,"message":result.message,"device_name":input_data.device_name,"dry_run":result.dry_run,"sent":result.sent,"status_code":result.status_code,"response_data":result.response_data}

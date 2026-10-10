@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from html import unescape
 from typing import Any, Iterator, Optional
 
 import httpx
@@ -23,6 +24,7 @@ DEFAULT_TICKET_ID_FIELDS = {
     "ticketid", "ticketnumber", "requestid", "requestnumber",
     "incidentid", "incidentnumber", "caseid", "casenumber",
     "servicerequestid", "servicerequestnumber", "srnumber", "incnumber",
+    "id", "ticketreference", "requestreference", "referencenumber",
 }
 
 MESSAGE_KEYS = {
@@ -98,6 +100,8 @@ def clean_ticket_identifier(value: Any) -> Optional[str]:
     if not text or len(text) < 4 or len(text) > 150:
         return None
     if text.isdigit() and len(text) < 4:
+        return None
+    if re.fullmatch(r"20\d{2}[-_/]\d{1,2}[-_/]\d{1,2}", text):
         return None
     if text.casefold() in SUCCESS_VALUES | FAILURE_VALUES | {
         "none", "null", "nil", "n/a", "na", "undefined", "dry-run", "dry_run"
@@ -218,12 +222,13 @@ class IEngageClient:
             )
 
         if success_marker:
+            source_message = self._extract_message(safe_response)
             return IEngageResult(
                 success=True, sent=True, dry_run=False, ticket_id=None,
                 message=(
-                    "iEngage accepted the ticket request, but the response did not contain "
-                    "a recognized ticket identifier. Review the logged response and add the "
-                    "actual field to IENGAGE_TICKET_ID_FIELDS."
+                    f"iEngage accepted the ticket request. Response: {source_message}"
+                    if source_message else
+                    "iEngage accepted the ticket request, but returned no response message or recognized ticket identifier."
                 ),
                 status_code=response.status_code,
                 response_data=safe_response,
@@ -360,35 +365,55 @@ class IEngageClient:
         configured = {normalize_key(field) for field in self.config.ticket_id_fields}
         return configured | {normalize_key(field) for field in DEFAULT_TICKET_ID_FIELDS}
 
-    def _extract_ticket_id(self, value: Any) -> Optional[str]:
+    def _extract_ticket_id(self, value: Any, parent_context: str = "") -> Optional[str]:
         fields = self._ticket_id_fields()
         if isinstance(value, dict):
             for key, item in value.items():
                 if normalize_key(key) in fields:
                     candidate = clean_ticket_identifier(item)
-                    if candidate:
+                    if candidate and self._identifier_has_reference_context(value, key, parent_context):
                         return candidate
-            for item in value.values():
-                candidate = self._extract_ticket_id(item)
+            for key,item in value.items():
+                candidate = self._extract_ticket_id(item, f"{parent_context} {key}")
                 if candidate:
                     return candidate
         elif isinstance(value, list):
             for item in value:
-                candidate = self._extract_ticket_id(item)
+                candidate = self._extract_ticket_id(item, parent_context)
                 if candidate:
                     return candidate
         return None
 
     @staticmethod
+    def _identifier_has_reference_context(node: dict[str, Any], key: Any, parent_context: str = "") -> bool:
+        normalized_key=normalize_key(key)
+        if normalized_key!="id":
+            return True
+        other_keys={normalize_key(name) for name in node if normalize_key(name)!="id"}
+        context=" ".join(other_keys)+" "+normalize_key(parent_context)
+        return any(term in context for term in ("ticket","request","incident","case","service","data","result"))
+
+    @staticmethod
     def _extract_ticket_id_from_message(value: Any) -> Optional[str]:
         texts = IEngageClient._extract_all_messages(value)
         texts.append(json.dumps(value, ensure_ascii=False, default=str))
-        for text in texts:
+        for raw_text in texts:
+            text = unescape(re.sub(r"<[^>]+>", " ", raw_text))
             for pattern in TICKET_PATTERNS:
                 match = pattern.search(text)
                 if match:
                     return match.group(0).replace(" ", "").upper()
             match = LABELED_TICKET_PATTERN.search(text)
+            if match:
+                candidate = clean_ticket_identifier(match.group(1))
+                if candidate and any(char.isdigit() for char in candidate):
+                    return candidate
+            # iEngage sometimes says only "ID: <value>" in a success message.
+            match = re.search(
+                r"\b(?:ticket\s+)?(?:reference|ref|id|number|no)\s*[:=#-]\s*([A-Z0-9][A-Z0-9_-]{3,})",
+                text,
+                re.IGNORECASE,
+            )
             if match:
                 candidate = clean_ticket_identifier(match.group(1))
                 if candidate and any(char.isdigit() for char in candidate):

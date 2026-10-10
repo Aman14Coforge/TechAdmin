@@ -522,6 +522,18 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 [class*="st-key-qa_"] .stButton > button:hover { border-color: #F3B9AA; transform: translateY(-1px); }
 [class*="st-key-qa_"] .stButton > button [data-testid="stIconMaterial"] { color: var(--ta-orange); font-size: 22px; margin-bottom: 8px; }
 [class*="st-key-qa_"] .stButton > button p { font-size: 14px; font-weight: 600; color: var(--ta-ink); text-align:left; white-space: normal; }
+[class*="st-key-security_quick_"] .stButton > button { height: 92px; min-height: 92px; padding: 16px 18px; background:#fff; border:1px solid var(--ta-line);
+  border-radius:14px; box-shadow:var(--ta-shadow); display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-start; text-align:left; }
+[class*="st-key-security_quick_"] .stButton > button > div, [class*="st-key-security_quick_"] .stButton > button > div > span {
+  flex-direction:column; align-items:flex-start !important; justify-content:flex-start !important; width:100%; gap:10px; }
+[class*="st-key-security_quick_"] .stButton > button [data-testid="stIconMaterial"] { color:var(--ta-orange); font-size:22px; margin:0 0 8px; }
+[class*="st-key-security_quick_"] .stButton > button p { color:var(--ta-ink); font-size:14px; font-weight:600; text-align:left; white-space:normal; }
+[class*="st-key-security_quick_"] .stButton > button:hover { border-color:#F3B9AA; transform:translateY(-1px); box-shadow:var(--ta-shadow); }
+.st-key-security_quick_device_report .stButton > button p::after { content:"Review one endpoint"; }
+.st-key-security_quick_search_a_kb .stButton > button p::after { content:"Find affected devices"; }
+.st-key-security_quick_fleet_ai_report .stButton > button p::after { content:"Prioritize fleet exposure"; }
+.st-key-security_quick_raise_tickets .stButton > button p::after { content:"Approval required"; }
+[class*="st-key-security_quick_"] .stButton > button p::after { display:block; color:var(--ta-muted); font-size:12px; font-weight:400; margin-top:3px; }
 
 /* Suggestion chips + composer ------------------------------------------------ */
 .st-key-chips { position: sticky; bottom: 0; z-index: 20; padding: 18px 0 6px;

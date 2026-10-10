@@ -9,11 +9,14 @@ from App.integration.ivanti.client import IvantiPatchClient
 from App.services.patch.config import settings
 from App.services.patch.ticket_service import PatchTicketService
 
+class PatchScanCancelled(RuntimeError):
+    """A scan stopped cooperatively after an operator request."""
+
 def parse_datetime(v:Any)->datetime|None:
     try:return datetime.fromisoformat(str(v).replace('Z','+00:00')) if v else None
     except (TypeError,ValueError):return None
 class PatchService:
-    def scan(self,scan_date:date|None=None,source:str='MANUAL')->dict[str,Any]:
+    def scan(self,scan_date:date|None=None,source:str='MANUAL',should_stop=None)->dict[str,Any]:
         day=scan_date or date.today(); client=IvantiPatchClient(); seen:set[str]=set(); errors=[]; processed=findings_count=0
         with SessionLocal() as db:
             run=PatchScanRun(scan_date=day,source=source,status='RUNNING');db.add(run);db.commit();db.refresh(run);run_id=run.scan_id
@@ -21,6 +24,8 @@ class PatchService:
             readiness=client.preflight()
             if not readiness.get('patch_scan_ready'):raise RuntimeError('Ivanti Patch Management preflight failed')
             for v in client.iter_vulnerable_devices():
+                if should_stop and should_stop():
+                    raise PatchScanCancelled("Operator requested the scan to stop.")
                 did=str(v.get('discoveryId') or '').strip(); name=str(v.get('machineName') or '').strip(); count=int(v.get('missingPatches') or 0)
                 if not did or not name or count<=0:continue
                 seen.add(did);processed+=1; found=[]
@@ -44,7 +49,16 @@ class PatchService:
                         db.add(PatchDeviceObservation(scan_id=run_id,scan_date=day,discovery_id=did,device_name=name,missing_patch_count=count,risk_score=v.get('riskScore'),last_scanned_at=parse_datetime(v.get('lastScannedDate')),ip_address=v.get('ipAddress'),os_name=v.get('osName'),notifications=s.notifications,telemetry={'platform':v.get('platform'),'os_version':v.get('osVersion'),'security_critical':v.get('securityCritical'),'security_important':v.get('securityImportant'),'exploited_missing_patches':v.get('exploited'),'collection_mode':'endpoint_vulnerability_missing_only'}))
                         for key,x in found:db.add(PatchFinding(scan_id=run_id,scan_date=day,discovery_id=did,device_name=name,evidence_key=key,evidence_type='CONFIRMED_MISSING',patch_name=x.get('patchName'),patch_id=x.get('patchId'),notification_id=x.get('notificationId'),kb_number=x.get('kbNumber'),vendor_name=x.get('vendorName'),patch_status=x.get('patchStatus'),severity=x.get('patchSeverity'),released_at=parse_datetime(x.get('released')),raw_evidence={'summary':x}))
                         db.commit();findings_count+=len(found)
+                    if processed % 100 == 0:
+                        with SessionLocal() as progress_db:
+                            progress=progress_db.get(PatchScanRun,run_id)
+                            if progress:
+                                progress.noncompliant_devices=processed
+                                progress.vulnerable_devices=processed
+                                progress_db.commit()
                 except Exception as exc:errors.append({'device':name,'discovery_id':did,'error':type(exc).__name__,'message':str(exc)[:500]})
+            if should_stop and should_stop():
+                raise PatchScanCancelled("Operator requested the scan to stop.")
             with SessionLocal() as db:
                 resolved=0
                 for s in db.scalars(select(PatchDeviceState).where(PatchDeviceState.is_active.is_(True))).all():
@@ -80,6 +94,10 @@ class PatchService:
             with SessionLocal() as db:
                 r=db.get(PatchScanRun,run_id);r.tickets_created=created;db.commit()
             return {'scan_id':str(run_id),'scan_date':day.isoformat(),'status':'PARTIAL' if errors else 'SUCCEEDED','devices_with_missing_patches':processed,'resolved_devices':resolved,'confirmed_missing_findings':findings_count,'eligible_devices':len(eligible),'tickets_created':created,'errors':errors}
+        except PatchScanCancelled as exc:
+            with SessionLocal() as db:
+                r=db.get(PatchScanRun,run_id);r.status='CANCELLED';r.completed_at=datetime.now(timezone.utc);r.noncompliant_devices=processed;r.vulnerable_devices=processed;r.errors=[{'error':type(exc).__name__,'message':str(exc)}];db.commit()
+            return {'scan_id':str(run_id),'scan_date':day.isoformat(),'status':'CANCELLED','devices_processed':processed,'message':str(exc),'tickets_created':0}
         except Exception as exc:
             with SessionLocal() as db:
                 r=db.get(PatchScanRun,run_id);r.status='FAILED';r.completed_at=datetime.now(timezone.utc);r.errors=[{'error':type(exc).__name__,'message':str(exc)[:1000]}];db.commit()

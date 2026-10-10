@@ -94,6 +94,27 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         result, _ = await self.submit({"message": "Request created successfully"})
         self.assertTrue(result.success)
         self.assertIsNone(result.ticket_id)
+        self.assertIn("Request created successfully", result.message)
+
+    async def test_extract_id_from_success_message(self):
+        result, _ = await self.submit({"message": "Ticket was created. ID: INC000107723"})
+        self.assertTrue(result.success)
+        self.assertEqual(result.ticket_id, "INC000107723")
+
+    async def test_extract_id_from_html_message(self):
+        result, _ = await self.submit({"message": "Ticket created: <b>INC000107724</b>"})
+        self.assertTrue(result.success)
+        self.assertEqual(result.ticket_id, "INC000107724")
+
+    async def test_extract_id_from_wrapped_data_id(self):
+        result, _ = await self.submit({"success": True, "data": {"id": "INC000107725"}})
+        self.assertTrue(result.success)
+        self.assertEqual(result.ticket_id, "INC000107725")
+
+    async def test_does_not_treat_date_as_ticket_id(self):
+        result, _ = await self.submit({"message": "Request created successfully on 2026-10-11"})
+        self.assertTrue(result.success)
+        self.assertIsNone(result.ticket_id)
 
     async def test_failure_takes_precedence_over_reference(self):
         result, _ = await self.submit({"success": False, "RequestID": "INC000107723", "message": "Rejected"})

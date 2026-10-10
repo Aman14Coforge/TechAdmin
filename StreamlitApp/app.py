@@ -2630,6 +2630,24 @@ def main() -> None:
     render_sidebar(history)
     render_topbar(claims)
 
+    if not PREVIEW_MODE:
+        try:
+            from App.services.patch.scheduler import (
+                patch_scan_is_running,
+                request_patch_scan_stop,
+            )
+            if patch_scan_is_running():
+                status_col, stop_col = st.columns([5, 1.2], vertical_alignment="center")
+                status_col.warning(
+                    "Ivanti compliance scan is running. A stop request takes effect after the current API page; partial scans will not resolve devices or raise automatic tickets."
+                )
+                if stop_col.button("Stop scan", key="global_stop_patch_scan", icon=":material/stop_circle:", width="stretch"):
+                    result = request_patch_scan_stop()
+                    st.toast(result.get("message") or "Stop requested.")
+                    st.rerun()
+        except Exception:
+            logging.getLogger(__name__).exception("Could not read patch scheduler status.")
+
     # Keep this only if the automatic sidebar expansion
     # is required. It generates a Streamlit deprecation warning.
     open_sidebar_once()

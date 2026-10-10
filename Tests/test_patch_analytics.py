@@ -4,9 +4,16 @@ from unittest.mock import Mock
 
 from App.services.patch.analytics_service import PatchAnalyticsService
 from App.services.patch.semantic import PatchSemanticInterpreter
+from StreamlitApp.patch_agent_page import _selected_device_names
+import pandas as pd
 
 
 class PatchAnalyticsTests(unittest.TestCase):
+    def test_stale_grid_selection_indices_are_ignored(self):
+        frame=pd.DataFrame([{"Device":"DEVICE-A"}])
+        self.assertEqual(_selected_device_names(frame,[0,4,-1]),["DEVICE-A"])
+        self.assertEqual(_selected_device_names(frame,[4,-1]),[])
+
     def test_security_queries_route_host_kb_and_all_devices(self):
         interpreter = PatchSemanticInterpreter()
         self.assertEqual(

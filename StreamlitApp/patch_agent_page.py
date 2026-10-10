@@ -14,6 +14,14 @@ from App.services.patch.security_query_service import SecurityPatchQueryService
 
 SORTS={"Missing patches: high to low":"missing_desc","Risk score: high to low":"risk_desc","Days open: high to low":"days_desc","Device name: A to Z":"name_asc"}
 
+def _selected_device_names(frame:pd.DataFrame,indices:list[Any])->list[str]:
+    names=[]
+    for index in indices:
+        if isinstance(index,int) and 0<=index<len(frame):
+            name=str(frame.iloc[index].get("Device") or "").strip()
+            if name and name not in names:names.append(name)
+    return names
+
 def _init():
     defaults={"security_selected":[],"security_details":None,"security_report":None,"security_job":None,"security_ticket_job":None,"security_ticket_results":None,"security_page":1,"security_search":"","security_sort":next(iter(SORTS)),"security_size":25,"security_date":date.today().isoformat(),"security_conversation":[],"security_browse_devices":False,"security_patch_search_results":None}
     for k,v in defaults.items():st.session_state.setdefault(k,v)
@@ -75,16 +83,25 @@ def _render_report(report):
     for i,(k,v) in enumerate(list(summary.items())[:4]):columns[i].metric(k.replace("_"," ").title(),v)
     if ev.get("unavailable_devices"):st.warning("No evidence at this snapshot for: " + ", ".join(ev["unavailable_devices"]))
     if ev.get("data_errors"):st.warning(f"Evidence retrieval failed for {len(ev['data_errors'])} device(s).");st.dataframe(ev["data_errors"],hide_index=True)
-    overview,priority,exposure,analysis=st.tabs(["Overview","Priority devices","Patch exposure","AI analysis"])
+    device_scope=report.get("report_type")=="device"
+    tab_labels=["Overview","Patch exposure","AI analysis"] if device_scope else ["Overview","Priority devices","Patch exposure","AI analysis"]
+    tabs=st.tabs(tab_labels)
+    overview=tabs[0]
+    if device_scope:
+        exposure,analysis=tabs[1:]
+        priority=None
+    else:
+        priority,exposure,analysis=tabs[1:]
     with overview:
         trend=pd.DataFrame(ev.get("trend") or [])
         if not trend.empty:st.line_chart(trend.set_index("Date")[["Missing patches"]],height=260)
         severity=ev.get("severity") or {}
         if severity:st.bar_chart(pd.DataFrame({"Severity":severity.keys(),"Count":severity.values()}).set_index("Severity"),height=240)
-    with priority:
-        frame=pd.DataFrame(ev.get("priority_devices") or [])
-        if frame.empty:st.info("Priority ranking is available for selected-device and fleet reports.")
-        else:st.dataframe(frame,hide_index=True,width="stretch")
+    if priority is not None:
+        with priority:
+            frame=pd.DataFrame(ev.get("priority_devices") or [])
+            if frame.empty:st.info("Priority ranking is available for selected-device and fleet reports.")
+            else:st.dataframe(frame,hide_index=True,width="stretch")
     with exposure:
         rows=ev.get("top_missing_patches") or ev.get("persistent_patches") or []
         if rows and isinstance(rows[0],(list,tuple)):
@@ -126,8 +143,12 @@ def _render_report(report):
 def _ticket_dialog():
     job=st.session_state.security_ticket_job;results=st.session_state.security_ticket_results
     if results is not None:
-        ok=sum(bool(x.get("success")) for x in results);failed=len(results)-ok
-        (st.success if failed==0 else st.warning)(f"Ticket processing finished: {ok} succeeded, {failed} failed.")
+        created=sum(bool(x.get("success") and x.get("ticket_id") and not x.get("dry_run")) for x in results)
+        accepted=sum(bool(x.get("success") and not x.get("ticket_id") and not x.get("dry_run")) for x in results)
+        previews=sum(bool(x.get("dry_run")) for x in results)
+        failed=sum(not bool(x.get("success")) for x in results)
+        message=f"Ticket processing: {created} created with ID, {accepted} accepted without ID, {previews} dry run, {failed} failed."
+        (st.success if failed==0 and accepted==0 and previews==0 else st.warning)(message)
         for result in results:
             with st.container(border=True):
                 st.markdown(f"**{result.get('device_name','Device')}**")
@@ -148,6 +169,12 @@ def _ticket_dialog():
                     st.error(result.get("message") or "Ticket creation failed.")
                     if result.get("ticket_id"):st.caption(f"Returned reference: {result['ticket_id']}")
                 st.caption(f"Status: {result.get('status','Unknown')} · Dry run: {result.get('dry_run',False)}")
+                if result.get("status_code") is not None:
+                    st.caption(f"iEngage HTTP status: {result['status_code']}")
+                response_data=result.get("response_data")
+                if isinstance(response_data,dict) and response_data:
+                    with st.expander("Sanitized iEngage response"):
+                        st.json(response_data,expanded=False)
         if st.button("Close",type="primary",width="stretch"):
             st.session_state.security_ticket_job=None;st.session_state.security_ticket_results=None;st.rerun()
         return
@@ -251,13 +278,14 @@ def render_patch_agent_page(claims:dict[str,Any],access:dict[str,Any])->None:
         if not st.session_state.security_conversation and not st.session_state.security_job:
             st.markdown('<div class="ta-hello"><h3>How can I help with endpoint security?</h3><p>Choose a starting point or ask in your own words. Reports use stored Ivanti scan evidence.</p></div>',unsafe_allow_html=True)
             cards=st.columns(4)
-            for col,label,query in zip(cards,("Device report","Search a KB","Fleet AI report","Raise tickets"),(
+            for col,label,icon,query in zip(cards,("Device report","Search a KB","Fleet AI report","Raise tickets"),
+                (":material/desktop_windows:",":material/search:",":material/analytics:",":material/confirmation_number:"),(
                 "Generate a patch report for device DESKTOP-QGK3G0J",
                 "Find devices missing KB5002912",
                 "Generate an AI report for all non-compliant devices today",
                 "Raise a ticket for the selected devices",
             )):
-                if col.button(label,key=f"security_quick_{label.casefold().replace(' ','_')}",icon=":material/security:",width="stretch"):
+                if col.button(label,key=f"security_quick_{label.casefold().replace(' ','_')}",icon=icon,width="stretch"):
                     _submit_security_query(query,operator)
                     st.rerun()
         selected_date=date.fromisoformat(st.session_state.security_date)
@@ -281,10 +309,12 @@ def render_patch_agent_page(claims:dict[str,Any],access:dict[str,Any])->None:
             data=SecurityPatchQueryService().list_devices(report_date=date.fromisoformat(st.session_state.security_date),search=st.session_state.security_search,sort=SORTS[st.session_state.security_sort],page=st.session_state.security_page,page_size=st.session_state.security_size,include_resolved=False)
             frame=pd.DataFrame([{"Device":r["device_name"],"IP address":r["ip_address"],"Operating system":r["os_name"],"Missing patches":r["missing_patch_count"],"Risk score":r["risk_score"],"Days open":r["consecutive_days"],"Ticket eligible":r["ticket_eligible"]} for r in data["rows"]])
             if not frame.empty:
-                event=st.dataframe(frame,hide_index=True,width="stretch",height=360,on_select="rerun",selection_mode="multi-row",key="security_devices")
+                selection_key=f"security_devices_{st.session_state.security_date}_{st.session_state.security_page}_{st.session_state.security_size}_{abs(hash(st.session_state.security_search))}"
+                event=st.dataframe(frame,hide_index=True,width="stretch",height=360,on_select="rerun",selection_mode="multi-row",key=selection_key)
                 indices=list(event.selection.rows) if event and hasattr(event,"selection") else []
-                st.session_state.security_selected=[str(frame.iloc[i]["Device"]) for i in indices]
+                st.session_state.security_selected=_selected_device_names(frame,indices)
             else:
+                st.session_state.security_selected=[]
                 st.info("No non-compliant devices match this date and filter.")
             selected=st.session_state.security_selected
             st.caption(f"Selected devices: {len(selected)} of {data['total']}")
