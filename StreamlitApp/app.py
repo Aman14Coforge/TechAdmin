@@ -1582,8 +1582,10 @@ def handle_input(query: str) -> None:
         "assistant",
     )
 
+    bypass_security_redirect=bool(st.session_state.pop("identity_security_redirect_bypass",False))
     is_security_request = bool(
         not PREVIEW_MODE
+        and not bypass_security_redirect
         and PatchSemanticInterpreter is not None
         and PatchSemanticInterpreter.matches(
             normalized_query
@@ -1594,13 +1596,7 @@ def handle_input(query: str) -> None:
         current_page == "assistant"
         and is_security_request
     ):
-        st.session_state.security_redirect_query = (
-            normalized_query
-        )
-        st.session_state.pending_run = None
-        st.session_state.pending_confirmation = None
-        st.session_state.page = "security"
-
+        st.session_state.security_redirect_pending_query=normalized_query
         st.rerun()
 
     pending = st.session_state.pending_confirmation
@@ -1630,6 +1626,25 @@ def handle_input(query: str) -> None:
         queue_run(normalized_query)
 
     st.rerun()
+
+
+@st.dialog("Open Security Agent?")
+def confirm_security_redirect() -> None:
+    query=str(st.session_state.get("security_redirect_pending_query") or "")
+    st.write("This looks like an endpoint-security request. Open Security Agent?")
+    if query:st.caption(query)
+    yes,no=st.columns(2)
+    if yes.button("Open Security Agent",type="primary",width="stretch",key="identity_to_security_confirm"):
+        st.session_state.page="security"
+        st.session_state.security_redirect_query=query
+        st.session_state.security_redirect_pending_query=None
+        st.rerun()
+    if no.button("Stay in Identity Agent",width="stretch",key="identity_to_security_cancel"):
+        append_turn("assistant","No problem. I left this request in Identity Agent.")
+        st.session_state.security_redirect_pending_query=None
+        st.rerun()
+
+
 def new_conversation() -> None:
     st.session_state.conversation = []
     st.session_state.pending_confirmation = None
@@ -2058,7 +2073,7 @@ def render_user_turn(turn: dict[str, Any], claims: dict[str, Any]) -> None:
 def request_history(limit: int = 20) -> list[dict[str, Any]]:
     access = access_info()
     user_id = access.get("user_id")
-    requester_id = user_id or access.get("user_principal_name")
+    requester_id = user_id or access.get("user_principal_name") or access.get("display_name")
 
     if requester_id:
         identity_items: list[dict[str, Any]] = []
@@ -2083,10 +2098,16 @@ def request_history(limit: int = 20) -> list[dict[str, Any]]:
                 security_items = []
 
         combined = identity_items + security_items
-        combined.sort(
-            key=lambda item: item.get("requested_at") or datetime.min,
-            reverse=True,
-        )
+        def _history_sort_key(item: dict[str, Any]) -> float:
+            value=item.get("requested_at")
+            if isinstance(value,str):
+                try:value=datetime.fromisoformat(value.replace("Z","+00:00"))
+                except ValueError:return 0.0
+            if isinstance(value,datetime):
+                if value.tzinfo is None:value=value.replace(tzinfo=timezone.utc)
+                return value.timestamp()
+            return 0.0
+        combined.sort(key=_history_sort_key,reverse=True)
         return combined[:limit]
     # identities without an app_users row: fall back to this browser session
     items = []
@@ -2487,6 +2508,8 @@ def contextual_chips() -> list[tuple[str, str]]:
 
 
 def page_assistant(claims: dict[str, Any]) -> None:
+    if st.session_state.get("security_redirect_pending_query"):
+        confirm_security_redirect()
     conversation = st.session_state.conversation
     with st.container(key="content"):
         with st.container(key="greet_row"):

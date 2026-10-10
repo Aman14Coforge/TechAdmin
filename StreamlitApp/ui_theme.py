@@ -522,7 +522,7 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 [class*="st-key-qa_"] .stButton > button:hover { border-color: #F3B9AA; transform: translateY(-1px); }
 [class*="st-key-qa_"] .stButton > button [data-testid="stIconMaterial"] { color: var(--ta-orange); font-size: 22px; margin-bottom: 8px; }
 [class*="st-key-qa_"] .stButton > button p { font-size: 14px; font-weight: 600; color: var(--ta-ink); text-align:left; white-space: normal; }
-[class*="st-key-security_quick_"] .stButton > button { height: 92px; min-height: 92px; padding: 16px 18px; background:#fff; border:1px solid var(--ta-line);
+[class*="st-key-security_quick_"] .stButton > button { height: 100px; min-height: 100px; padding: 14px 16px; box-sizing:border-box; overflow:hidden; background:#fff; border:1px solid var(--ta-line);
   border-radius:14px; box-shadow:var(--ta-shadow); display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-start; text-align:left; }
 [class*="st-key-security_quick_"] .stButton > button > div, [class*="st-key-security_quick_"] .stButton > button > div > span {
   flex-direction:column; align-items:flex-start !important; justify-content:flex-start !important; width:100%; gap:10px; }
@@ -531,9 +531,12 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 [class*="st-key-security_quick_"] .stButton > button:hover { border-color:#F3B9AA; transform:translateY(-1px); box-shadow:var(--ta-shadow); }
 .st-key-security_quick_device_report .stButton > button p::after { content:"Review one endpoint"; }
 .st-key-security_quick_search_a_kb .stButton > button p::after { content:"Find affected devices"; }
-.st-key-security_quick_fleet_ai_report .stButton > button p::after { content:"Prioritize fleet exposure"; }
+.st-key-security_quick_show_non-compliance .stButton > button p::after { content:"Explore the latest stored fleet snapshot"; }
 .st-key-security_quick_raise_tickets .stButton > button p::after { content:"Approval required"; }
-[class*="st-key-security_quick_"] .stButton > button p::after { display:block; color:var(--ta-muted); font-size:12px; font-weight:400; margin-top:3px; }
+.st-key-security_quick_show_devices .stButton > button p::after { content:"Choose a snapshot and status"; }
+.st-key-security_quick_search_by_device .stButton > button p::after { content:"Find an endpoint"; }
+.st-key-security_quick_search_patch_or_kb .stButton > button p::after { content:"Search by name or KB"; }
+[class*="st-key-security_quick_"] .stButton > button p::after { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:1; overflow:hidden; color:var(--ta-muted); font-size:12px; font-weight:400; margin-top:3px; line-height:1.35; }
 
 /* Suggestion chips + composer ------------------------------------------------ */
 .st-key-chips { position: sticky; bottom: 0; z-index: 20; padding: 18px 0 6px;

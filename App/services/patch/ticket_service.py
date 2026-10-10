@@ -32,10 +32,20 @@ class PatchTicketService:
             if existing and existing.status in {"CREATING", "REVIEW_REQUIRED"}:
                 return {"success":False,"status":existing.status,"ticket_id":existing.external_ticket_id,"message":"A ticket request is in progress or its outcome is uncertain. Check iEngage before retrying to avoid a duplicate.","device_name":state.device_name,"dry_run":False,"sent":True}
             if existing and existing.status in FINAL_LIVE_STATUSES:
-                message = (f"An active remediation ticket already exists: {existing.external_ticket_id}."
-                           if existing.external_ticket_id else
-                           "iEngage already accepted this ticket request without returning a reference. Check iEngage before resubmitting.")
-                return {"success":True,"status":"ALREADY_EXISTS","ticket_id":existing.external_ticket_id,"message":message,"device_name":state.device_name,"dry_run":False,"sent":True}
+                reference=existing.external_ticket_id
+                if not reference and existing.response_summary:
+                    try:
+                        stored=json.loads(existing.response_summary)
+                    except (TypeError,ValueError):
+                        stored={"message":existing.response_summary}
+                    reference=self.integration.client._extract_ticket_id_from_message(stored)
+                    if reference:
+                        existing.external_ticket_id=reference
+                        state.ticket_reference=reference
+                        db.commit()
+                message=(f"Remediation ticket {reference} already exists." if reference else
+                         "iEngage accepted this request earlier; no new ticket was submitted.")
+                return {"success":True,"status":"ALREADY_EXISTS","ticket_id":reference,"message":message,"device_name":state.device_name,"dry_run":False,"sent":True}
             # A historical dry-run must never block a current live request.
             if existing and existing.status=="DRY_RUN" and self.config.dry_run:
                 return {"success":True,"status":"DRY_RUN","ticket_id":existing.external_ticket_id or "DRY-RUN","message":"A dry-run record already exists for this active episode.","device_name":state.device_name,"dry_run":True,"sent":False}

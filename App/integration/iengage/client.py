@@ -43,13 +43,13 @@ FAILURE_VALUES = {
 }
 
 TICKET_PATTERNS = (
-    re.compile(r"\bINC[-_ ]?\d{3,}\b", re.IGNORECASE),
-    re.compile(r"\bSR[-_ ]?\d{3,}\b", re.IGNORECASE),
-    re.compile(r"\bREQ[-_ ]?\d{3,}\b", re.IGNORECASE),
-    re.compile(r"\bRITM[-_ ]?\d{3,}\b", re.IGNORECASE),
-    re.compile(r"\bCASE[-_ ]?\d{3,}\b", re.IGNORECASE),
-    re.compile(r"\bTKT[-_ ]?\d{3,}\b", re.IGNORECASE),
-    re.compile(r"\bWO[-_ ]?\d{3,}\b", re.IGNORECASE),
+    re.compile(r"(?<![A-Z0-9])INC[-_ ]?\d{3,}(?!\d)", re.IGNORECASE),
+    re.compile(r"(?<![A-Z0-9])SR[-_ ]?\d{3,}(?!\d)", re.IGNORECASE),
+    re.compile(r"(?<![A-Z0-9])REQ[-_ ]?\d{3,}(?!\d)", re.IGNORECASE),
+    re.compile(r"(?<![A-Z0-9])RITM[-_ ]?\d{3,}(?!\d)", re.IGNORECASE),
+    re.compile(r"(?<![A-Z0-9])CASE[-_ ]?\d{3,}(?!\d)", re.IGNORECASE),
+    re.compile(r"(?<![A-Z0-9])TKT[-_ ]?\d{3,}(?!\d)", re.IGNORECASE),
+    re.compile(r"(?<![A-Z0-9])WO[-_ ]?\d{3,}(?!\d)", re.IGNORECASE),
 )
 
 LABELED_TICKET_PATTERN = re.compile(

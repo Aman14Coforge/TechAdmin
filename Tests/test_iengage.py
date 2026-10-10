@@ -111,6 +111,11 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.ticket_id, "INC000107725")
 
+    async def test_extract_id_embedded_in_iengage_success_message(self):
+        result, _ = await self.submit({"StatusCode": 200, "Message": "107729_INC000107729"})
+        self.assertTrue(result.success)
+        self.assertEqual(result.ticket_id, "INC000107729")
+
     async def test_does_not_treat_date_as_ticket_id(self):
         result, _ = await self.submit({"message": "Request created successfully on 2026-10-11"})
         self.assertTrue(result.success)

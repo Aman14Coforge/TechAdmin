@@ -1,14 +1,34 @@
 import unittest
 from datetime import date
 from unittest.mock import Mock
+from unittest.mock import patch
 
 from App.services.patch.analytics_service import PatchAnalyticsService
 from App.services.patch.semantic import PatchSemanticInterpreter
+from App.services.patch.ollama_analyzer import OllamaSecurityAnalyzer
 from StreamlitApp.patch_agent_page import _selected_device_names
 import pandas as pd
 
 
 class PatchAnalyticsTests(unittest.TestCase):
+    def test_analyzer_normalizes_summary_variants_and_falls_back_to_evidence(self):
+        evidence={"snapshot":"2026-10-10","summary":{"devices":12,"total_missing_instances":30},"priority_devices":[]}
+        normalized=OllamaSecurityAnalyzer._normalize_analysis({"summary":"Twelve devices need patches"},evidence,"fleet")
+        self.assertEqual(normalized["executive_summary"],"Twelve devices need patches")
+        fallback=OllamaSecurityAnalyzer._normalize_analysis({"some_other_key":[]},evidence,"fleet")
+        self.assertTrue(fallback["_evidence_only_fallback"])
+        self.assertIn("12 non-compliant devices",fallback["executive_summary"])
+
+    def test_analyzer_returns_evidence_report_if_ollama_fails(self):
+        analyzer=OllamaSecurityAnalyzer()
+        evidence={"snapshot":"2026-10-10","summary":{"devices":12,"total_missing_instances":30},"priority_devices":[]}
+        with patch("App.services.patch.ollama_analyzer.ChatOllama") as model:
+            model.return_value.invoke.side_effect=TimeoutError("model unavailable")
+            result=analyzer.analyze(evidence,report_type="fleet")
+        self.assertFalse(result["available"])
+        self.assertEqual(result["fallback"],"evidence_based")
+        self.assertIn("12 non-compliant devices",result["analysis"]["executive_summary"])
+
     def test_stale_grid_selection_indices_are_ignored(self):
         frame=pd.DataFrame([{"Device":"DEVICE-A"}])
         self.assertEqual(_selected_device_names(frame,[0,4,-1]),["DEVICE-A"])
@@ -25,6 +45,13 @@ class PatchAnalyticsTests(unittest.TestCase):
         self.assertEqual(kb["patch_query"], "KB5002912")
         self.assertEqual(
             interpreter.interpret("Show all devices for 2026-10-10")["action"],
+            "device_list",
+        )
+        plain_list=interpreter.interpret("Show all the non compiance devices for today")
+        self.assertEqual(plain_list["action"],"device_list")
+        self.assertEqual(plain_list["device_status"],"non_compliant")
+        self.assertEqual(
+            interpreter.interpret("Give me a report of all non-compliant devices")["action"],
             "patch_report",
         )
 
