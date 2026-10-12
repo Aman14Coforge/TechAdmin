@@ -19,8 +19,7 @@
 
 # import pandas as pd
 # import streamlit as st
-# import patch_scheduler_bootstrap  # noqa: F401
-# from patch_report_ui import (
+# # from patch_report_ui import (
 #     initialize_patch_report_state,
 #     render_patch_report,
 # )
@@ -876,6 +875,7 @@ from __future__ import annotations
 import copy
 import hmac
 import json
+import logging
 import os
 import re
 import time
@@ -931,8 +931,23 @@ else:
     )
     from App.db.login_authorization import authorize_claims, extract_display_name  # noqa: E402
     from App.db.operation_audit import get_user_request_history  # noqa: E402
+    from App.services.patch.security_history import get_security_query_history  # noqa: E402
 
-from investigation_report_ui import render_investigation_report  # noqa: E402
+from investigation_report_ui import (
+    render_investigation_report,
+)  # noqa: E402
+
+if PREVIEW_MODE:
+    render_patch_agent_page = None
+    PatchSemanticInterpreter = None
+else:
+    from patch_agent_page import (
+        render_patch_agent_page,
+    )  # noqa: E402
+
+    from App.services.patch.semantic import (
+        PatchSemanticInterpreter,
+    )  # noqa: E402
 from ui_theme import (  # noqa: E402
     coforge_wordmark,
     icon_alert,
@@ -982,21 +997,50 @@ inject_base_css()
 def html_block(markup: str) -> None:
     st.markdown(markup, unsafe_allow_html=True)
 
-
 def inject_workspace_layout_css() -> None:
-        st.markdown("""
+    st.markdown(
+        """
         <style>
-            .st-key-content { max-width: min(1000px, 100%) !important; width:100%; }
-            .st-key-history_sidebar_scroll, .st-key-history_page_scroll {
-                overscroll-behavior:contain; scrollbar-gutter:stable; }
-            .st-key-history_page_scroll { width:100%; }
-            .st-key-history_sidebar_scroll::-webkit-scrollbar, .st-key-history_page_scroll::-webkit-scrollbar { width:7px; }
-            .st-key-history_sidebar_scroll::-webkit-scrollbar-thumb, .st-key-history_page_scroll::-webkit-scrollbar-thumb {
-                background:rgba(120,135,155,.45); border-radius:8px; }
+            .st-key-content,
+            .st-key-security_content {
+                max-width: min(
+                    1000px,
+                    100%
+                ) !important;
+                width: 100%;
+                margin-left: auto;
+                margin-right: auto;
+            }
+
+            .st-key-history_sidebar_scroll,
+            .st-key-history_page_scroll {
+                overscroll-behavior: contain;
+                scrollbar-gutter: stable;
+            }
+
+            .st-key-history_page_scroll {
+                width: 100%;
+            }
+
+            .st-key-history_sidebar_scroll
+           ::-webkit-scrollbar,
+            .st-key-history_page_scroll
+           ::-webkit-scrollbar {
+                width: 7px;
+            }
+
+            .st-key-history_sidebar_scroll
+           ::-webkit-scrollbar-thumb,
+            .st-key-history_page_scroll
+           ::-webkit-scrollbar-thumb {
+                background:
+                    rgba(120, 135, 155, .45);
+                border-radius: 8px;
+            }
         </style>
-        """, unsafe_allow_html=True)
-
-
+        """,
+        unsafe_allow_html=True,
+    )
 # =============================================================================
 # Constants
 # =============================================================================
@@ -1035,6 +1079,7 @@ INTENT_TITLES = {
 ROLE_TITLES = {"helpdesk": "Helpdesk operator", "admin": "Operations admin", "operations_admin": "Operations admin"}
 PAGES = [
     ("assistant", "Identity Agent", ":material/smart_toy:"),
+    ("security", "Security Agent", ":material/security:"),
     ("history", "Your History", ":material/history:"),
 ]
 
@@ -1524,20 +1569,82 @@ def cancel_pending_confirmation() -> None:
         "intent": pending.get("intent") if isinstance(pending, dict) else None,
         "message": "Operation cancelled. No changes were made.", "error": None,
     })
-
-
 def handle_input(query: str) -> None:
+    normalized_query = (
+        query.strip()
+        if isinstance(query, str)
+        else ""
+    )
+
+    if not normalized_query:
+        return
+
+    current_page = st.session_state.get(
+        "page",
+        "assistant",
+    )
+
+    bypass_security_redirect=bool(st.session_state.pop("identity_security_redirect_bypass",False))
+    is_security_request = bool(
+        not PREVIEW_MODE
+        and not bypass_security_redirect
+        and PatchSemanticInterpreter is not None
+        and PatchSemanticInterpreter.matches(
+            normalized_query
+        )
+    )
+
+    if (
+        current_page == "assistant"
+        and is_security_request
+    ):
+        st.session_state.security_redirect_pending_query=normalized_query
+        st.rerun()
+
     pending = st.session_state.pending_confirmation
-    answer = query.strip().casefold().rstrip(".!")
-    if isinstance(pending, dict) and answer in YES_WORDS:
-        append_turn("user", query)
+    answer = normalized_query.casefold().rstrip(".!")
+
+    if (
+        isinstance(pending, dict)
+        and answer in YES_WORDS
+    ):
+        append_turn(
+            "user",
+            normalized_query,
+        )
         approve_pending()
-    elif isinstance(pending, dict) and answer in NO_WORDS:
-        append_turn("user", query)
+
+    elif (
+        isinstance(pending, dict)
+        and answer in NO_WORDS
+    ):
+        append_turn(
+            "user",
+            normalized_query,
+        )
         cancel_pending_confirmation()
+
     else:
-        queue_run(query)
+        queue_run(normalized_query)
+
     st.rerun()
+
+
+@st.dialog("Open Security Agent?")
+def confirm_security_redirect() -> None:
+    query=str(st.session_state.get("security_redirect_pending_query") or "")
+    st.write("This looks like an endpoint-security request. Open Security Agent?")
+    if query:st.caption(query)
+    yes,no=st.columns(2)
+    if yes.button("Open Security Agent",type="primary",width="stretch",key="identity_to_security_confirm"):
+        st.session_state.page="security"
+        st.session_state.security_redirect_query=query
+        st.session_state.security_redirect_pending_query=None
+        st.rerun()
+    if no.button("Stay in Identity Agent",width="stretch",key="identity_to_security_cancel"):
+        append_turn("assistant","No problem. I left this request in Identity Agent.")
+        st.session_state.security_redirect_pending_query=None
+        st.rerun()
 
 
 def new_conversation() -> None:
@@ -2078,12 +2185,44 @@ def render_user_turn(turn: dict[str, Any], claims: dict[str, Any]) -> None:
 # =============================================================================
 
 def request_history(limit: int = 20) -> list[dict[str, Any]]:
-    user_id = access_info().get("user_id")
-    if user_id:
-        try:
-            return get_user_request_history(user_id, limit=limit)
-        except Exception:
-            return []
+    access = access_info()
+    user_id = access.get("user_id")
+    requester_id = user_id or access.get("user_principal_name") or access.get("display_name")
+
+    if requester_id:
+        identity_items: list[dict[str, Any]] = []
+        security_items: list[dict[str, Any]] = []
+
+        if user_id:
+            try:
+                identity_items = get_user_request_history(
+                    user_id,
+                    limit=limit,
+                )
+            except Exception:
+                identity_items = []
+
+        if not PREVIEW_MODE:
+            try:
+                security_items = get_security_query_history(
+                    str(requester_id),
+                    limit=limit,
+                )
+            except Exception:
+                security_items = []
+
+        combined = identity_items + security_items
+        def _history_sort_key(item: dict[str, Any]) -> float:
+            value=item.get("requested_at")
+            if isinstance(value,str):
+                try:value=datetime.fromisoformat(value.replace("Z","+00:00"))
+                except ValueError:return 0.0
+            if isinstance(value,datetime):
+                if value.tzinfo is None:value=value.replace(tzinfo=timezone.utc)
+                return value.timestamp()
+            return 0.0
+        combined.sort(key=_history_sort_key,reverse=True)
+        return combined[:limit]
     # identities without an app_users row: fall back to this browser session
     items = []
     for turn in reversed(st.session_state.conversation):
@@ -2121,50 +2260,236 @@ def sign_out(claims: dict[str, Any]) -> None:
         st.logout()
 
 
-def render_sidebar(history: list[dict[str, Any]]) -> None:
+def render_sidebar(
+    history: list[dict[str, Any]],
+) -> None:
     page = st.session_state.page
-    agents_open = bool(st.session_state.get("agents_open"))
+
+    agents_open = bool(
+        st.session_state.get(
+            "agents_open"
+        )
+    )
+
     with st.sidebar:
-        html_block(f'<div class="ta-side-brand">{coforge_wordmark(46)}</div>')
-        with st.container(key="agents_toggle_open" if agents_open else "agents_toggle"):
-            if st.button("AI Agents", key="agents_toggle_btn", icon=":material/apps:", width="stretch"):
-                st.session_state.agents_open = not agents_open
-                st.rerun()
-        if agents_open:
-            with st.container(key="agent_list"):
-                with st.container(key="agent_identity_active" if page == "assistant" else "agent_identity"):
-                    if st.button("Identity Agent", key="navbtn_assistant", icon=":material/badge:", width="stretch"):
-                        st.session_state.page = "assistant"
-                        st.rerun()
-                html_block(
-                    '<div class="ta-agent-soon"><span class="material-symbols-rounded">shield</span>'
-                    '<span class="nm">Security Agent</span><span class="pill">Soon</span></div>'
-                    '<div class="ta-agent-soon"><span class="material-symbols-rounded">lan</span>'
-                    '<span class="nm">Network Agent</span><span class="pill">Soon</span></div>'
+        html_block(
+            f'<div class="ta-side-brand">'
+            f'{coforge_wordmark(46)}'
+            f'</div>'
+        )
+
+        with st.container(
+            key=(
+                "agents_toggle_open"
+                if agents_open
+                else "agents_toggle"
+            )
+        ):
+            if st.button(
+                "AI Agents",
+                key="agents_toggle_btn",
+                icon=":material/apps:",
+                width="stretch",
+            ):
+                st.session_state.agents_open = (
+                    not agents_open
                 )
-        with st.container(key="nav_active_history" if page == "history" else "nav_history"):
-            if st.button("Your History", key="navbtn_history", icon=":material/history:", width="stretch"):
+                st.rerun()
+
+        if agents_open:
+            with st.container(
+                key="agent_list"
+            ):
+                # Identity Agent navigation
+                with st.container(
+                    key=(
+                        "agent_identity_active"
+                        if page == "assistant"
+                        else "agent_identity"
+                    )
+                ):
+                    if st.button(
+                        "Identity Agent",
+                        key="navbtn_assistant",
+                        icon=":material/badge:",
+                        width="stretch",
+                    ):
+                        st.session_state.page = (
+                            "assistant"
+                        )
+
+                        # Do not carry an unapproved Security
+                        # operation into Identity Agent.
+                        st.session_state.security_pending = (
+                            None
+                        )
+
+                        st.rerun()
+
+                # Security Agent navigation
+                with st.container(
+                    key=(
+                        "agent_security_active"
+                        if page == "security"
+                        else "agent_security"
+                    )
+                ):
+                    if st.button(
+                        "Security Agent",
+                        key="navbtn_security",
+                        icon=":material/security:",
+                        width="stretch",
+                    ):
+                        st.session_state.page = (
+                            "security"
+                        )
+
+                        # Do not carry an Identity Agent
+                        # execution or approval into
+                        # Security Agent.
+                        st.session_state.pending_run = None
+                        st.session_state.pending_confirmation = (
+                            None
+                        )
+
+                        st.rerun()
+
+                # Future Network Agent placeholder
+                html_block(
+                    '<div class="ta-agent-soon">'
+                    '<span '
+                    'class="material-symbols-rounded">'
+                    'lan'
+                    '</span>'
+                    '<span class="nm">'
+                    'Network Agent'
+                    '</span>'
+                    '<span class="pill">'
+                    'Soon'
+                    '</span>'
+                    '</div>'
+                )
+
+        # Request history navigation
+        with st.container(
+            key=(
+                "nav_active_history"
+                if page == "history"
+                else "nav_history"
+            )
+        ):
+            if st.button(
+                "Your History",
+                key="navbtn_history",
+                icon=":material/history:",
+                width="stretch",
+            ):
                 st.session_state.page = "history"
                 st.rerun()
 
-        head_l, head_r = st.columns([5, 1], vertical_alignment="center")
-        head_l.markdown('<div class="ta-side-label">Recent requests</div>', unsafe_allow_html=True)
-        with head_r:
-            with st.container(key="side_search"):
-                with st.popover(":material/search:"):
-                    st.text_input("Filter your history", key="history_filter", placeholder="Email or operation")
-        term = str(st.session_state.get("history_filter") or "").strip().casefold()
-        shown = [h for h in history if not term or term in json.dumps(h, default=str).casefold()]
-        with st.container(border=False, key="history_sidebar_scroll"):
+        # Recent requests heading and filter
+        head_left, head_right = st.columns(
+            [5, 1],
+            vertical_alignment="center",
+        )
+
+        head_left.markdown(
+            '<div class="ta-side-label">'
+            'Recent requests'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        with head_right:
+            with st.container(
+                key="side_search"
+            ):
+                with st.popover(
+                    ":material/search:"
+                ):
+                    st.text_input(
+                        "Filter your history",
+                        key="history_filter",
+                        placeholder=(
+                            "Email or operation"
+                        ),
+                    )
+
+        term = str(
+            st.session_state.get(
+                "history_filter"
+            )
+            or ""
+        ).strip().casefold()
+
+        shown = [
+            item
+            for item in history
+            if (
+                not term
+                or term
+                in json.dumps(
+                    item,
+                    default=str,
+                ).casefold()
+            )
+        ]
+
+        with st.container(
+            border=False,
+            key="history_sidebar_scroll",
+        ):
             if not shown:
-                html_block('<div class="ta-side-empty">No requests recorded yet.</div>' if not term
-                           else '<div class="ta-side-empty">No matching requests.</div>')
-            items = []
+                if term:
+                    html_block(
+                        '<div class="ta-side-empty">'
+                        'No matching requests.'
+                        '</div>'
+                    )
+                else:
+                    html_block(
+                        '<div class="ta-side-empty">'
+                        'No requests recorded yet.'
+                        '</div>'
+                    )
+
+            request_items: list[str] = []
+
             for item in shown:
-                sub = " · ".join(p for p in (str(item.get("target") or ""), time_ago(item.get("requested_at"))) if p)
-                items.append(f'<div class="ta-recent" title="{escape(str(item.get("request") or ""))}">'
-                             f'<strong>{escape(_history_title(item))}</strong><span>{escape(sub)}</span></div>')
-            html_block("".join(items))
+                subtitle = " · ".join(
+                    part
+                    for part in (
+                        str(
+                            item.get(
+                                "target"
+                            )
+                            or ""
+                        ),
+                        time_ago(
+                            item.get(
+                                "requested_at"
+                            )
+                        ),
+                    )
+                    if part
+                )
+
+                request_items.append(
+                    '<div '
+                    'class="ta-recent" '
+                    f'title="{escape(str(item.get("request") or ""))}">'
+                    '<strong>'
+                    f'{escape(_history_title(item))}'
+                    '</strong>'
+                    '<span>'
+                    f'{escape(subtitle)}'
+                    '</span>'
+                    '</div>'
+                )
+
+            html_block(
+                "".join(request_items)
+            )
 
 
 def system_health() -> tuple[bool, list[tuple[str, Any]]]:
@@ -2299,6 +2624,8 @@ def contextual_chips() -> list[tuple[str, str]]:
 
 
 def page_assistant(claims: dict[str, Any]) -> None:
+    if st.session_state.get("security_redirect_pending_query"):
+        confirm_security_redirect()
     conversation = st.session_state.conversation
     with st.container(key="content"):
         with st.container(key="greet_row"):
@@ -2417,25 +2744,124 @@ def open_sidebar_once() -> None:
             </script>""",
             height=0,
         )
-
-
 def main() -> None:
     init_state()
+
+    if not PREVIEW_MODE:
+        try:
+            from App.services.patch.bootstrap import start_patch_background_services
+
+            start_patch_background_services()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not start the embedded patch scheduler."
+            )
+
     claims = require_authentication()
+
     inject_app_css()
     inject_workspace_layout_css()
+
     history = request_history()
-    if st.session_state.page not in {key for key, _, _ in PAGES}:
+
+    valid_pages = {
+        key
+        for key, _, _ in PAGES
+    }
+
+    current_page = st.session_state.get(
+        "page",
+        "assistant",
+    )
+
+    if current_page not in valid_pages:
+        current_page = "assistant"
         st.session_state.page = "assistant"
-    page = st.session_state.page
+
     render_sidebar(history)
     render_topbar(claims)
+
+    if not PREVIEW_MODE:
+        try:
+            from App.services.patch.scheduler import (
+                patch_scan_is_running,
+                request_patch_scan_stop,
+            )
+            if patch_scan_is_running():
+                status_col, stop_col = st.columns([5, 1.2], vertical_alignment="center")
+                status_col.warning(
+                    "Ivanti compliance scan is running. A stop request takes effect after the current API page; partial scans will not resolve devices or raise automatic tickets."
+                )
+                if stop_col.button("Stop scan", key="global_stop_patch_scan", icon=":material/stop_circle:", width="stretch"):
+                    result = request_patch_scan_stop()
+                    st.toast(result.get("message") or "Stop requested.")
+                    st.rerun()
+        except Exception:
+            logging.getLogger(__name__).exception("Could not read patch scheduler status.")
+
+    # Keep this only if the automatic sidebar expansion
+    # is required. It generates a Streamlit deprecation warning.
     open_sidebar_once()
-    if page == "history":
+
+    if current_page == "history":
         page_history(history)
-    else:
-        page_assistant(claims)
+        return
+
+    if current_page == "security":
+        if PREVIEW_MODE:
+            with st.container(key="content"):
+                html_block(
+                    '<div class="ta-page-head">'
+                    '<h1>Security Agent</h1>'
+                    '<p>'
+                    'Security Agent requires the live '
+                    'PostgreSQL and Ivanti configuration.'
+                    '</p>'
+                    '</div>'
+                )
+
+                st.info(
+                    "Security Agent is unavailable in "
+                    "TECHADMIN_UI_PREVIEW mode."
+                )
+
+            return
+
+        if render_patch_agent_page is None:
+            with st.container(key="content"):
+                st.error(
+                    "Security Agent could not be loaded."
+                )
+
+            return
+
+        redirected = st.session_state.pop(
+            "security_redirect_query",
+            None,
+        )
+
+        if redirected:
+            st.session_state[
+                "patch_query_prefill"
+            ] = redirected
+
+            st.session_state[
+                "security_redirect_notice"
+            ] = True
+
+        render_patch_agent_page(
+            claims,
+            access_info(),
+        )
+
+        return
+
+    # Identity Agent is the default page.
+    page_assistant(claims)
 
 
 if __name__ == "__main__":
     main()
+
+
+
