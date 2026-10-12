@@ -334,6 +334,18 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 .ta-recent span { display:block; color: #8C9AAE; font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ta-recent.active { background: var(--ta-navy-2); border-left-color: var(--ta-orange); }
 .ta-recent .st { font-size: 10.5px; padding: 1px 6px; border-radius: 5px; margin-left: 6px; background: rgba(255,255,255,.06); color:#AFC0D3; }
+/* clickable recent-request items */
+[class*="st-key-sidehist_"] { position: relative; gap: 0 !important; border-radius: 10px; border-left: 2px solid transparent; margin-bottom: 2px; }
+[class*="st-key-sidehist_"]:hover { background: rgba(255,255,255,.04); }
+[class*="st-key-sidehist_"][class*="_active"] { background: var(--ta-navy-2); border-left-color: var(--ta-orange); }
+[data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton button { height: auto !important; min-height: 0; padding: 10px 12px 30px 12px !important;
+  border: none !important; box-shadow: none !important; justify-content: flex-start !important; text-align: left;
+  background: transparent !important; color: #E6EBF2 !important; font-size: 14px; border-radius: 10px; }
+[data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton, [data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton > div { width: 100%; }
+[data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton button > div, [data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton button > div > span { justify-content: flex-start !important; width: 100%; min-width: 0; }
+[data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block !important; font-weight: 500; }
+.ta-recent-sub { margin-top: -36px; padding: 0 12px 14px 14px; color: #8C9AAE; font-size: 12px; pointer-events: none; position: relative;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ta-side-empty { color: #8C9AAE; font-size: 12.5px; padding: 4px 10px 8px; }
 
 .st-key-side_search [data-testid="stPopoverButton"] { background: transparent; border: none; color: #8C9AAE; min-height: 26px; height: 26px; padding: 0 6px; }
@@ -499,10 +511,16 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 /* Pages (history / directory) */
 .ta-page-head h1 { font-size: 26px; font-weight: 400; letter-spacing: -.02em; margin: 0 0 6px; padding: 0; color: var(--ta-ink); }
 .ta-page-head p { color: var(--ta-muted); font-size: 14px; margin: 0 0 20px; }
-.ta-hist { display:grid; grid-template-columns: 1.5fr 1fr .8fr .9fr; gap: 12px; align-items:center; padding: 13px 16px; border-bottom: 1px solid var(--ta-line-2); font-size: 13.5px; }
+.ta-hist { display:grid; grid-template-columns: 1.5fr 1fr .8fr .75fr .55fr; gap: 12px; align-items:center; padding: 13px 16px; border-bottom: 1px solid var(--ta-line-2); font-size: 13.5px; }
 .ta-hist.h { color: var(--ta-muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; font-weight: 600; background: #FAFBFC; border-bottom: 1px solid var(--ta-line); }
 .ta-hist .q { color: var(--ta-ink); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ta-hist .t { color: var(--ta-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[class*="st-key-hrow_"] { padding: 10px 16px; border-bottom: 1px solid var(--ta-line-2); }
+[class*="st-key-hrow_"]:hover { background: #FAFBFC; }
+[class*="st-key-hrow_"] .q { color: var(--ta-ink); font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[class*="st-key-hrow_"] .t { color: var(--ta-muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[class*="st-key-hrow_"] .stButton button { height: 34px; min-height: 34px; font-size: 12.5px; padding: 0 10px; }
+.st-key-hist_card > div { gap: 0 !important; }
 .st-key-hist_card, .st-key-dir_card { background:#fff; border: 1px solid var(--ta-line); border-radius: var(--ta-radius); box-shadow: var(--ta-shadow); overflow:hidden; }
 .st-key-dir_card { padding: 20px 22px; }
 

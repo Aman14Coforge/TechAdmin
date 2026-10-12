@@ -40,6 +40,7 @@ the audit trail without stopping a password reset that is already underway.
 
 from __future__ import annotations
 
+import json
 import socket
 import uuid
 from datetime import datetime, timezone
@@ -69,17 +70,40 @@ from App.db.models.operations import Operation
 # request ID. Any fixed UUID works; what matters is that it never changes, so
 # "ui_9f29c7fc" always maps to the same row.
 REQUEST_ID_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+MAX_EXECUTION_RESULT_CHARS = 1_000_000
+EXECUTION_SECRET_KEY_PARTS = (
+    "password", "passwd", "secret", "token", "authorization", "api_key", "private_key",
+)
+EXECUTION_DROP_KEYS = {"password_token", "masked_password", "_dashboard_secret", "_transient_password"}
 
 
 def _optional_uuid(value: Any) -> Optional[uuid.UUID]:
     """Convert a UUID-like value to UUID, returning None when invalid."""
     if not value:
         return None
-
     try:
         return uuid.UUID(str(value))
     except (ValueError, AttributeError, TypeError):
         return None
+
+
+def _sanitize_execution_value(value: Any) -> Any:
+    """Recursively sanitize response data before putting it in the audit table."""
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in value.items():
+            normalized = str(key).strip().casefold().replace("-", "_")
+            compact = normalized.replace("_", "")
+            if normalized in EXECUTION_DROP_KEYS:
+                continue
+            if any(part.replace("_", "") in compact for part in EXECUTION_SECRET_KEY_PARTS):
+                sanitized[key] = "[redacted]"
+            else:
+                sanitized[key] = _sanitize_execution_value(item)
+        return sanitized
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_execution_value(item) for item in value]
+    return value
 
 
 def _resolve_requester_id(session, requester: Optional[str]) -> Optional[uuid.UUID]:
@@ -376,27 +400,45 @@ def ensure_operation_id(
 
 def summarize_result(response: Dict[str, Any]) -> str:
     """
-    Build a short, sanitized description of what an execution produced.
+    Serialize the complete credential-safe workflow response for later use.
 
-    The response payload itself is never stored: on a password reset it can
-    carry the temporary password. Only the message line and the field names
-    are kept.
+    The shared history sanitizer redacts credentials, drops transient handles,
+    and trims oversized payloads before the response is written to the audit
+    table. This preserves useful execution output for history without storing
+    secrets.
 
     Args:
         response: The flow response.
 
     Returns:
-        A string safe to write to result_summary.
+        JSON text safe to write to result_summary.
     """
-    message = str(response.get("message") or "").strip()
-
-    result = (response.get("tool_result") or {}).get("result") or {}
-    fields = sorted(result.keys()) if isinstance(result, dict) else []
-
-    if fields:
-        return f"{message[:400]} | fields={','.join(fields)[:300]}"
-
-    return message[:400]
+    payload = _sanitize_execution_value(response or {})
+    serialized = json.dumps(payload, ensure_ascii=False, default=str)
+    if len(serialized) > MAX_EXECUTION_RESULT_CHARS:
+        tool_result = payload.get("tool_result")
+        result = tool_result.get("result") if isinstance(tool_result, dict) else None
+        report = result.get("report") if isinstance(result, dict) else None
+        timeline = report.get("timeline") if isinstance(report, dict) else None
+        if isinstance(timeline, list):
+            report["timeline"] = timeline[:200]
+            report["timeline_truncated"] = True
+            serialized = json.dumps(payload, ensure_ascii=False, default=str)
+    if len(serialized) > MAX_EXECUTION_RESULT_CHARS:
+        tool_result = payload.get("tool_result") if isinstance(payload.get("tool_result"), dict) else {}
+        payload = {
+            key: payload.get(key)
+            for key in ("success", "request_id", "correlation_id", "intent", "message", "error")
+            if key in payload
+        }
+        payload["tool_result"] = {
+            key: tool_result.get(key)
+            for key in ("success", "tool", "message")
+            if key in tool_result
+        }
+        payload["history_truncated"] = True
+        serialized = json.dumps(payload, ensure_ascii=False, default=str)
+    return serialized
 
 
 def record_execution(
@@ -600,6 +642,83 @@ def get_user_request_history(
             _error_detail(exc),
         )
         return []
+
+
+def get_request_result(user_id: str, request_id: str) -> Optional[dict[str, Any]]:
+    """Fetch the latest saved execution result for a request owned by user_id."""
+    requester_id = _optional_uuid(user_id)
+    if requester_id is None or not request_id:
+        return None
+
+    try:
+        request_key = to_request_uuid(request_id)
+        with SessionLocal() as session:
+            request_statement = (
+                select(OperationRequest, Operation.operation_name)
+                .outerjoin(Operation, Operation.operation_id == OperationRequest.operation_id)
+                .where(
+                    OperationRequest.request_id == request_key,
+                    OperationRequest.requested_by == requester_id,
+                )
+            )
+            request_row = session.execute(request_statement).first()
+            if request_row is None:
+                return None
+            request, operation_name = request_row
+
+            execution_statement = (
+                select(OperationExecution)
+                .where(OperationExecution.request_id == request_key)
+                .order_by(
+                    OperationExecution.retry_count.desc(),
+                    OperationExecution.finished_at.desc().nullslast(),
+                )
+                .limit(1)
+            )
+            execution = session.execute(execution_statement).scalars().first()
+
+        response = None
+        stored_summary = execution.result_summary if execution is not None else None
+        if stored_summary:
+            try:
+                parsed = json.loads(stored_summary) if isinstance(stored_summary, str) else stored_summary
+                response = parsed if isinstance(parsed, dict) else None
+            except (TypeError, ValueError):
+                # Older rows contain a plain-text summary rather than JSON.
+                response = None
+
+        tool_result = response.get("tool_result") if isinstance(response, dict) else None
+        summary = (
+            (tool_result.get("message") if isinstance(tool_result, dict) else None)
+            or (response.get("message") if isinstance(response, dict) else None)
+            or stored_summary
+        )
+        return {
+            "request_id": str(request.request_id),
+            "request": request.original_request or "",
+            "operation": operation_name or "Identity request",
+            "target": request.target_reference or "",
+            "status": request.status,
+            "requested_at": request.requested_at,
+            "completed_at": request.completed_at,
+            "has_execution": execution is not None,
+            "execution_status": execution.execution_status if execution is not None else None,
+            "executed_at": execution.finished_at if execution is not None else None,
+            "duration_ms": execution.duration_ms if execution is not None else None,
+            "error_message": execution.error_message if execution is not None else None,
+            "summary": summary,
+            "response": response,
+            "truncated": bool(response and response.get("history_truncated")),
+        }
+    except Exception as exc:
+        logger.error(
+            "AUDIT_REQUEST_RESULT_FAILED | user_id={} | request_id={} | error_type={} | detail={}",
+            requester_id,
+            request_id,
+            type(exc).__name__,
+            _error_detail(exc),
+        )
+        return None
 
 
 def status_for(response: Dict[str, Any]) -> str:

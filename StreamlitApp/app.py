@@ -912,6 +912,7 @@ if PREVIEW_MODE:
     get_config_status = _preview.get_config_status
     send_password_to_manager = _preview.send_password_to_manager
     get_user_request_history = _preview.get_user_request_history
+    load_request_result = _preview.load_request_result
     authorize_claims = None
 
     def extract_display_name(claims: dict[str, Any]) -> str:
@@ -924,6 +925,7 @@ else:
         check_ollama,
         email_is_configured,
         get_config_status,
+        load_request_result,
         send_password_to_manager,
     )
     from App.db.login_authorization import authorize_claims, extract_display_name  # noqa: E402
@@ -1389,6 +1391,7 @@ def init_state() -> None:
     st.session_state.setdefault("ollama_check_result", None)
     st.session_state.setdefault("page", "assistant")
     st.session_state.setdefault("history_filter", "")
+    st.session_state.setdefault("restored_from", None)
 
 
 def access_info() -> dict[str, Any]:
@@ -1502,6 +1505,111 @@ def new_conversation() -> None:
     st.session_state.pending_confirmation = None
     st.session_state.pending_run = None
     st.session_state.page = "assistant"
+    st.session_state.restored_from = None
+
+
+def _iso(value: Any) -> str:
+    if isinstance(value, datetime):
+        return (value if value.tzinfo else value.astimezone()).isoformat()
+    return str(value or now_iso())
+
+
+HISTORY_NOTES = {
+    "AWAITING_APPROVAL": "This request was waiting for approval and never ran, so there is no result to show.",
+    "REJECTED": "This request was blocked by policy. Nothing ran, so there is no result to show.",
+    "CANCELLED": "This request was cancelled before it ran. No changes were made.",
+    "RECEIVED": "This request didn't finish, so no result was recorded.",
+}
+
+
+HISTORY_CSS = """
+<style>
+/* Recent requests (sidebar): the .ta-recent card is drawn in HTML and an
+   invisible Streamlit button is stretched over it to make it clickable. */
+[class*="st-key-sidehist_"] { position: relative !important; gap: 0 !important; margin: 0 0 2px !important; }
+[class*="st-key-sidehist_"] .ta-recent { margin: 0; transition: background .15s ease; }
+[class*="st-key-sidehist_"]:hover .ta-recent { background: rgba(255,255,255,.05); }
+[class*="st-key-sidehist_"]:hover .ta-recent.active { background: #132842; }
+[class*="st-key-sidehist_"] [data-testid="stElementContainer"]:has(.stButton),
+[class*="st-key-sidehist_"] .element-container:has(.stButton) {
+  position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important;
+  margin: 0 !important; z-index: 2; }
+[class*="st-key-sidehist_"] .stButton, [class*="st-key-sidehist_"] .stButton > div,
+[class*="st-key-sidehist_"] .stButton button {
+  width: 100% !important; height: 100% !important; min-height: 0 !important; }
+[class*="st-key-sidehist_"] .stButton button {
+  opacity: 0 !important; padding: 0 !important; border: none !important; background: transparent !important;
+  box-shadow: none !important; cursor: pointer; }
+[class*="st-key-sidehist_"] [data-testid="stMarkdownContainer"]:has(.ta-recent) { margin-bottom: 0 !important; }
+
+/* Request history page rows */
+[class*="st-key-hrow_"] { padding: 10px 16px; border-bottom: 1px solid #EEF0F4; }
+[class*="st-key-hrow_"]:hover { background: #FAFBFC; }
+[class*="st-key-hrow_"] .q { color: #1B2433; font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[class*="st-key-hrow_"] .t { color: #667085; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[class*="st-key-hrow_"] .stButton button { height: 34px; min-height: 34px; font-size: 12.5px; padding: 0 10px; }
+.st-key-hist_card > div { gap: 0 !important; }
+.st-key-hist_card .ta-hist.h { grid-template-columns: 1.5fr 1fr .8fr .75fr .55fr; }
+</style>
+"""
+
+
+def open_history_item(item: dict[str, Any]) -> bool:
+    """
+    Show a past request and its stored result.
+
+    The result is read from operation_executions.result_summary, for the
+    signed-in user's own request only (App.db.operation_audit.get_request_result).
+    Nothing is executed again.
+    """
+    user_id = access_info().get("user_id")
+    if not user_id or not item.get("request_id"):
+        return False
+    try:
+        record = load_request_result(user_id, item["request_id"])
+    except Exception:
+        record = None
+    record = record or {
+        "request": item.get("request"), "operation": item.get("operation"), "target": item.get("target"),
+        "status": item.get("status"), "requested_at": item.get("requested_at"), "response": None,
+        "has_execution": False, "summary": None,
+    }
+
+    response = record.get("response")
+    status = str(record.get("status") or "").upper()
+    if isinstance(response, dict):
+        response = dict(response)
+        if record.get("duration_ms") is not None:
+            response["_ui_elapsed"] = round(float(record["duration_ms"]) / 1000, 2)
+        if record.get("truncated"):
+            response["_history_truncated"] = True
+    else:
+        if record.get("has_execution") and record.get("summary"):
+            note = ("Only a short summary was stored for this request (it ran before full results were saved): "
+                    f"{record['summary']}")
+        elif record.get("has_execution"):
+            note = "This request ran, but its result wasn't stored."
+            if record.get("error_message"):
+                note += f" Error: {record['error_message']}"
+        else:
+            note = HISTORY_NOTES.get(status, "No result was recorded for this request.")
+        response = {"success": None, "intent": record.get("operation") or item.get("operation"),
+                    "metadata": {"email": record.get("target")}, "_history_note": note}
+
+    st.session_state.conversation = [
+        {"role": "user", "content": record.get("request") or "(no request text)",
+         "ts": _iso(record.get("requested_at")), "restored": True},
+        {"role": "assistant", "content": response, "query": record.get("request"),
+         "ts": _iso(record.get("executed_at") or record.get("completed_at") or record.get("requested_at")),
+         "restored": True},
+    ]
+    st.session_state.pending_confirmation = None
+    st.session_state.pending_run = None
+    st.session_state.page = "assistant"
+    st.session_state.restored_from = {
+        "request_id": item.get("request_id"), "when": record.get("requested_at"), "status": status,
+    }
+    return True
 
 
 # =============================================================================
@@ -1665,7 +1773,8 @@ def render_password_reset(result: Dict[str, Any], response: Dict[str, Any], idx:
             avatar="", kicker="Password reset complete", title=str(employee), sub=str(username),
             avatar_html=f'<div class="ta-avatar lg" style="background:var(--ta-ok-bg);color:var(--ta-ok)">{icon_key(20)}</div>',
         ))
-        masked = escape(str(result.get("masked_password") or "Not available"))
+        masked = escape(str(result.get("masked_password")
+                            or ("Not stored in history" if not token else "Not available")))
         html_block(
             kv_grid([("Username", username), ("Employee", employee), ("Manager", manager_name),
                      ("Manager email", manager_email)], keep_empty=True)
@@ -1673,7 +1782,8 @@ def render_password_reset(result: Dict[str, Any], response: Dict[str, Any], idx:
               f'<span>Temporary password</span><strong class="ta-secret">{masked}</strong></div>'
         )
         if not token:
-            html_block('<div class="ta-note warn">The password is no longer retrievable for this reset. Run the reset again.</div>')
+            html_block('<div class="ta-note warn">The temporary password is never stored in history. '
+                       'Run the reset again if the user still needs one.</div>')
         else:
             status_key = f"email_status_{token}"
             st.session_state.setdefault(status_key, None)
@@ -1799,6 +1909,8 @@ def render_approval_card(turn: dict[str, Any], response: Dict[str, Any], idx: in
 def assistant_summary(response: Dict[str, Any]) -> str:
     intent = str(response.get("intent") or "")
     tool_result = response.get("tool_result") if isinstance(response.get("tool_result"), dict) else {}
+    if response.get("_history_note"):
+        return str(response["_history_note"])
     if response.get("cancelled"):
         return "Cancelled. No changes were made."
     if response.get("confirmation_required"):
@@ -1828,7 +1940,10 @@ def render_assistant_turn(turn: dict[str, Any], idx: int) -> None:
         intent = str(response.get("intent") or "")
         tool_result = response.get("tool_result")
         result = tool_result.get("result") if isinstance(tool_result, dict) else None
-        if response.get("cancelled") or response.get("clarification_required"):
+        if response.get("_history_truncated"):
+            html_block('<div class="ta-note warn">This saved result was very large, so long lists were shortened '
+                       'when it was stored.</div>')
+        if response.get("cancelled") or response.get("clarification_required") or response.get("_history_note"):
             pass
         elif response.get("confirmation_required"):
             render_approval_card(turn, response, idx)
@@ -1839,7 +1954,7 @@ def render_assistant_turn(turn: dict[str, Any], idx: int) -> None:
                 from patch_report_ui import render_patch_report
 
                 render_patch_report(result)
-            elif intent == "password_reset" and result.get("password_token"):
+            elif intent == "password_reset" and (result.get("password_token") or turn.get("restored")):
                 render_password_reset(result, response, idx)
             elif intent == "get_user_details":
                 record = result.get("user")
@@ -1851,7 +1966,7 @@ def render_assistant_turn(turn: dict[str, Any], idx: int) -> None:
         elif response.get("message") and response.get("message") != assistant_summary(response):
             html_block(f'<div class="ta-note">{escape(str(response["message"]))}</div>')
 
-        if response and not response.get("cancelled"):
+        if response and not response.get("cancelled") and not response.get("_history_note"):
             with st.expander("Technical details"):
                 facts = [
                     ("Intent", intent or None), ("Confidence", response.get("confidence")),
@@ -1938,13 +2053,23 @@ def render_sidebar(claims: dict[str, Any], history: list[dict[str, Any]]) -> Non
         if not shown:
             html_block('<div class="ta-side-empty">No requests recorded yet.</div>' if not term
                        else '<div class="ta-side-empty">No matching requests.</div>')
-        items = []
+        can_open = bool(access_info().get("user_id"))
+        restored = st.session_state.restored_from
         for i, item in enumerate(shown):
             sub = " · ".join(p for p in (str(item.get("target") or ""), time_ago(item.get("requested_at"))) if p)
-            active = " active" if i == 0 and page == "assistant" and st.session_state.conversation else ""
-            items.append(f'<div class="ta-recent{active}" title="{escape(str(item.get("request") or ""))}">'
-                         f'<strong>{escape(_history_title(item))}</strong><span>{escape(sub)}</span></div>')
-        html_block("".join(items))
+            active = (page == "assistant" and isinstance(restored, dict) and bool(st.session_state.conversation)
+                      and restored.get("request_id") == item.get("request_id"))
+            if not can_open or not item.get("request_id"):
+                html_block(f'<div class="ta-recent{" active" if active else ""}" title="{escape(str(item.get("request") or ""))}">'
+                           f'<strong>{escape(_history_title(item))}</strong><span>{escape(sub)}</span></div>')
+                continue
+            with st.container(key=f"sidehist_{i}"):
+                html_block(f'<div class="ta-recent{" active" if active else ""}">'
+                           f'<strong>{escape(_history_title(item))}</strong><span>{escape(sub)}</span></div>')
+                # Invisible button stretched over the card (see HISTORY_CSS).
+                if st.button(f"Open {_history_title(item)}", key=f"openreq_{item['request_id']}"):
+                    open_history_item(item)
+                    st.rerun()
 
         with st.container(key="side_bottom"):
             name = claims.get("name") or claims.get("preferred_username") or "TechAdmin User"
@@ -2062,7 +2187,9 @@ def contextual_chips() -> list[tuple[str, str]]:
         if turn.get("role") != "assistant" or not isinstance(response, dict):
             continue
         target = response_target(response)
-        if not target:
+        # History rows only carry a masked target (am*****@coforge.com); never
+        # build follow-up queries from it.
+        if not target or "*" in target or response.get("_history_note"):
             return []
         intent = response.get("intent")
         tool_result = response.get("tool_result") if isinstance(response.get("tool_result"), dict) else {}
@@ -2089,7 +2216,9 @@ def page_assistant(claims: dict[str, Any]) -> None:
         with st.container(key="greet_row"):
             left, right = st.columns([5, 1.4], vertical_alignment="center")
             with left:
-                sub = ("Here's the result from your latest identity request." if conversation
+                restored = st.session_state.restored_from
+                sub = ("Here's a saved result from your request history." if restored and conversation
+                       else "Here's the result from your latest identity request." if conversation
                        else "What would you like to take care of today?")
                 html_block(f'<div class="ta-greet"><h1>{greeting()}, {escape(first_name(claims.get("name") or "TechAdmin"))}</h1>'
                            f'<p>{sub}</p></div>')
@@ -2098,6 +2227,16 @@ def page_assistant(claims: dict[str, Any]) -> None:
                     if st.button("New conversation", icon=":material/add_comment:", width="stretch", key="new_conv_btn"):
                         new_conversation()
                         st.rerun()
+
+        restored = st.session_state.restored_from
+        if isinstance(restored, dict) and conversation:
+            when = restored.get("when")
+            when_text = when.astimezone().strftime("%d %b %Y, %H:%M") if isinstance(when, datetime) else time_ago(when)
+            html_block(
+                f'<div class="ta-note" style="margin-bottom:18px;display:flex;gap:10px;align-items:center">'
+                f'{icon_shield(16)}<span>Saved result from <strong>{escape(str(when_text))}</strong>, shown as it was '
+                f'recorded. Nothing was run again. Ask something new below to continue.</span></div>'
+            )
 
         if not conversation and not st.session_state.pending_run:
             html_block('<div class="ta-hello"><h3>Quick actions</h3>'
@@ -2138,21 +2277,32 @@ def page_assistant(claims: dict[str, Any]) -> None:
 def page_history(history: list[dict[str, Any]]) -> None:
     with st.container(key="content"):
         html_block('<div class="ta-page-head"><h1>Request history</h1>'
-                   '<p>Your recent identity requests, as recorded in the operation audit log.</p></div>')
+                   '<p>Your recent requests from the operation audit log. Open one to see the result that was '
+                   'recorded when it ran.</p></div>')
+        can_open = bool(access_info().get("user_id"))
         with st.container(key="hist_card"):
-            rows = ['<div class="ta-hist h"><span>Request</span><span>Target</span><span>Status</span><span>When</span></div>']
-            for item in history:
+            html_block('<div class="ta-hist h"><span>Request</span><span>Target</span><span>Status</span>'
+                       '<span>When</span><span></span></div>')
+            if not history:
+                html_block('<div class="ta-empty" style="padding:22px 16px">No requests recorded yet.</div>')
+            for i, item in enumerate(history):
                 when = item.get("requested_at")
                 when_text = when.astimezone().strftime("%d %b, %H:%M") if isinstance(when, datetime) else time_ago(when)
-                rows.append(
-                    f'<div class="ta-hist"><span class="q" title="{escape(str(item.get("request") or ""))}">'
-                    f'{escape(_history_title(item))}<br><span class="t">{escape(str(item.get("request") or ""))}</span></span>'
-                    f'<span class="t">{escape(str(item.get("target") or "—"))}</span>'
-                    f'<span>{_status_badge(item.get("status"))}</span><span class="t">{escape(when_text)}</span></div>'
-                )
-            if not history:
-                rows.append('<div class="ta-empty" style="padding:22px 16px">No requests recorded yet.</div>')
-            html_block("".join(rows))
+                with st.container(key=f"hrow_{i}"):
+                    c1, c2, c3, c4, c5 = st.columns([1.5, 1, 0.8, 0.75, 0.55], vertical_alignment="center", gap="small")
+                    c1.markdown(
+                        f'<div class="q" title="{escape(str(item.get("request") or ""))}">{escape(_history_title(item))}</div>'
+                        f'<div class="t">{escape(str(item.get("request") or ""))}</div>', unsafe_allow_html=True)
+                    c2.markdown(f'<div class="t">{escape(str(item.get("target") or "—"))}</div>', unsafe_allow_html=True)
+                    c3.markdown(_status_badge(item.get("status")), unsafe_allow_html=True)
+                    c4.markdown(f'<div class="t">{escape(when_text)}</div>', unsafe_allow_html=True)
+                    if can_open and item.get("request_id"):
+                        has_result = bool(item.get("has_result"))
+                        if c5.button("Open" if has_result else "View", key=f"hist_open_{item['request_id']}",
+                                     width="stretch", icon=":material/open_in_new:" if has_result else None,
+                                     help=None if has_result else "No result was recorded for this request"):
+                            open_history_item(item)
+                            st.rerun()
         st.write("")
         if st.session_state.conversation:
             data = json.dumps(redact_sensitive_history(copy.deepcopy(st.session_state.conversation)),
@@ -2208,6 +2358,7 @@ def main() -> None:
     init_state()
     claims = require_authentication()
     inject_app_css()
+    html_block(HISTORY_CSS)
     history = request_history()
     page = st.session_state.page
     render_sidebar(claims, history)

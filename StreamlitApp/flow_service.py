@@ -51,6 +51,7 @@ load_dotenv(
 
 from loguru import logger  # noqa: E402
 
+from App.db.operation_audit import get_request_result  # noqa: E402
 from App.services.email_service import EmailConfig, send_password_email  # noqa: E402
 from App.services.password_file import generate_password_file  # noqa: E402
 from App.services.password_vault import password_vault  # noqa: E402
@@ -479,6 +480,19 @@ def send_password_to_manager(password_token: str):
         message,
         entry.manager_email if sent else "",
     )
+
+
+def load_request_result(user_id: str | None, request_id: str | None) -> Dict[str, Any] | None:
+    """
+    Fetch a past request and its stored result for the signed-in user.
+
+    The result comes from operation_executions.result_summary. Returns None
+    when the request is not found or belongs to someone else.
+    """
+
+    if not user_id or not request_id:
+        return None
+    return get_request_result(str(user_id), str(request_id))
 
 
 def email_is_configured() -> bool:
