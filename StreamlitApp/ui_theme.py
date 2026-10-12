@@ -360,6 +360,23 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 .ta-recent.active { background: var(--ta-navy-2); border-left-color: var(--ta-orange); }
 .ta-recent .st { font-size: 10.5px; padding: 1px 6px; border-radius: 5px; margin-left: 6px; background: rgba(255,255,255,.06); color:#AFC0D3; }
 .ta-side-empty { color: #8C9AAE; font-size: 12.5px; padding: 4px 10px 8px; }
+/* Clickable history rows: the real button is stretched invisibly over the styled row */
+.stVerticalBlock[class*="st-key-recent_"], .stVerticalBlock[class*="st-key-hist_row_"] { position: relative; gap: 0 !important; }
+.stVerticalBlock[class*="st-key-recent_"] > .stElementContainer[class*="st-key-open_"],
+.stVerticalBlock[class*="st-key-hist_row_"] > .stElementContainer[class*="st-key-open_"] { position: absolute !important; inset: 0; z-index: 2; margin: 0 !important; height: 100% !important; }
+[class*="st-key-open_recent_"] .stButton, [class*="st-key-open_hist_"] .stButton,
+[class*="st-key-open_recent_"] .stButton > div, [class*="st-key-open_hist_"] .stButton > div,
+[class*="st-key-open_recent_"] .stButton span, [class*="st-key-open_hist_"] .stButton span { width: 100% !important; height: 100% !important; }
+[class*="st-key-open_recent_"] button, [class*="st-key-open_hist_"] button { width: 100% !important; height: 100% !important; min-height: 0 !important;
+  opacity: 0 !important; cursor: pointer; padding: 0 !important; border: none !important; }
+.stVerticalBlock[class*="st-key-recent_"]:hover .ta-recent { background: rgba(255,255,255,.06); }
+.stVerticalBlock[class*="st-key-hist_row_"]:hover .ta-hist { background: #FAFBFC; }
+.stVerticalBlock[class*="st-key-recent_"] [data-testid="stMarkdownContainer"], .stVerticalBlock[class*="st-key-recent_"] .stMarkdown,
+.stVerticalBlock[class*="st-key-recent_"] .stMarkdown > div, .stVerticalBlock[class*="st-key-hist_row_"] [data-testid="stMarkdownContainer"],
+.stVerticalBlock[class*="st-key-hist_row_"] .stMarkdown, .stVerticalBlock[class*="st-key-hist_row_"] .stMarkdown > div { margin-bottom: 0 !important; }
+.st-key-hist_card { gap: 0 !important; }
+.st-key-hist_card [data-testid="stMarkdownContainer"], .st-key-hist_card .stMarkdown, .st-key-hist_card .stMarkdown > div { margin-bottom: 0 !important; }
+.st-key-history_sidebar_scroll { gap: 2px !important; }
 
 .st-key-side_search [data-testid="stPopoverButton"] { background: transparent; border: none; color: #8C9AAE; min-height: 26px; height: 26px; padding: 0 6px; }
 .st-key-side_search [data-testid="stPopoverButton"]:hover { color:#fff; }
@@ -522,6 +539,37 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 [class*="st-key-qa_"] .stButton > button:hover { border-color: #F3B9AA; transform: translateY(-1px); }
 [class*="st-key-qa_"] .stButton > button [data-testid="stIconMaterial"] { color: var(--ta-orange); font-size: 22px; margin-bottom: 8px; }
 [class*="st-key-qa_"] .stButton > button p { font-size: 14px; font-weight: 600; color: var(--ta-ink); text-align:left; white-space: normal; }
+[class*="st-key-qa_"] .stButton > button p::after { display:block; margin-top:4px; font-size:12.5px; font-weight:400; color:var(--ta-muted); }
+.st-key-qa_lookup .stButton > button p::after { content:"View profile, status and groups"; }
+.st-key-qa_reset .stButton > button p::after { content:"Issue a temporary password"; }
+.st-key-qa_grant .stButton > button p::after { content:"Add a user to a group"; }
+.st-key-qa_revoke .stButton > button p::after { content:"Remove a user from a group"; }
+.st-key-qa_investigate .stButton > button p::after { content:"Review failed sign-ins"; }
+.st-key-qa_unlock .stButton > button p::after { content:"Clear an account lockout"; }
+/* Quick-action dialog: hide it as soon as it is submitted. Streamlit keeps a
+   submitted dialog on screen (faded) until the next script run finishes, which
+   can take a while for a live request. Once its fields are marked stale the
+   dialog is finished with, so hide the whole overlay. */
+.stDialog:has(.stElementContainer[class*="st-key-qa_email"][data-stale="true"]) { display: none !important; }
+/* Help & support box */
+.ta-support-head { display:flex; flex-direction:column; gap:4px; margin-bottom:6px; min-width:300px; }
+.ta-support-head strong { font-size:15px; color:var(--ta-ink); }
+.ta-support-head span { font-size:13px; color:var(--ta-muted); }
+[class*="st-key-security_quick_"] .stButton > button { height: 100px; min-height: 100px; padding: 14px 16px; box-sizing:border-box; overflow:hidden; background:#fff; border:1px solid var(--ta-line);
+  border-radius:14px; box-shadow:var(--ta-shadow); display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-start; text-align:left; }
+[class*="st-key-security_quick_"] .stButton > button > div, [class*="st-key-security_quick_"] .stButton > button > div > span {
+  flex-direction:column; align-items:flex-start !important; justify-content:flex-start !important; width:100%; gap:10px; }
+[class*="st-key-security_quick_"] .stButton > button [data-testid="stIconMaterial"] { color:var(--ta-orange); font-size:22px; margin:0 0 8px; }
+[class*="st-key-security_quick_"] .stButton > button p { color:var(--ta-ink); font-size:14px; font-weight:600; text-align:left; white-space:normal; }
+[class*="st-key-security_quick_"] .stButton > button:hover { border-color:#F3B9AA; transform:translateY(-1px); box-shadow:var(--ta-shadow); }
+.st-key-security_quick_device_report .stButton > button p::after { content:"Review one endpoint"; }
+.st-key-security_quick_search_a_kb .stButton > button p::after { content:"Find affected devices"; }
+.st-key-security_quick_show_non-compliance .stButton > button p::after { content:"Explore the latest stored fleet snapshot"; }
+.st-key-security_quick_raise_tickets .stButton > button p::after { content:"Approval required"; }
+.st-key-security_quick_show_devices .stButton > button p::after { content:"Choose a snapshot and status"; }
+.st-key-security_quick_search_by_device .stButton > button p::after { content:"Find an endpoint"; }
+.st-key-security_quick_search_patch_or_kb .stButton > button p::after { content:"Search by name or KB"; }
+[class*="st-key-security_quick_"] .stButton > button p::after { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:1; overflow:hidden; color:var(--ta-muted); font-size:12px; font-weight:400; margin-top:3px; line-height:1.35; }
 
 /* Suggestion chips + composer ------------------------------------------------ */
 .st-key-chips { position: sticky; bottom: 0; z-index: 20; padding: 18px 0 6px;
@@ -585,3 +633,27 @@ def inject_login_css() -> None:
 
 def inject_app_css() -> None:
     st.markdown(APP_CSS, unsafe_allow_html=True)
+
+# Security Agent navigation styles added by integration script.
+SECURITY_AGENT_CSS = r"""
+<style>
+/* SECURITY_AGENT_NAV */
+[class*="st-key-agent_security"] .stButton > button {
+  height:32px; min-height:32px; padding:0 10px; font-size:13px; border-radius:8px;
+}
+.st-key-agent_security_active .stButton > button {
+  background:transparent !important; color:#fff !important;
+}
+.st-key-agent_security_active .stButton > button [data-testid="stIconMaterial"] {
+  color:#F27A62 !important;
+}
+.st-key-agent_security_active .stButton > button div[data-testid="stMarkdownContainer"] p::after {
+  content:""; width:6px; height:6px; border-radius:50%; background:#22A35A;
+}
+</style>
+"""
+
+_original_inject_app_css = inject_app_css
+def inject_app_css() -> None:
+    _original_inject_app_css()
+    st.markdown(SECURITY_AGENT_CSS, unsafe_allow_html=True)
