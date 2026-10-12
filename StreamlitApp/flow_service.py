@@ -51,8 +51,12 @@ load_dotenv(
 
 from loguru import logger  # noqa: E402
 
-from App.db.operation_audit import get_request_result  # noqa: E402
-from App.services.email_service import EmailConfig, send_password_email  # noqa: E402
+from App.services.email_service import (  # noqa: E402
+    EmailConfig,
+    send_password_email,
+    send_support_email,
+    support_recipient,
+)
 from App.services.password_file import generate_password_file  # noqa: E402
 from App.services.password_vault import password_vault  # noqa: E402
 from App.utils.config import Config, Logger  # noqa: E402
@@ -482,20 +486,34 @@ def send_password_to_manager(password_token: str):
     )
 
 
-def load_request_result(user_id: str | None, request_id: str | None) -> Dict[str, Any] | None:
-    """
-    Fetch a past request and its stored result for the signed-in user.
-
-    The result comes from operation_executions.result_summary. Returns None
-    when the request is not found or belongs to someone else.
-    """
-
-    if not user_id or not request_id:
-        return None
-    return get_request_result(str(user_id), str(request_id))
-
-
 def email_is_configured() -> bool:
     """Report whether SMTP settings are present."""
 
     return EmailConfig.is_configured()
+
+
+def send_support_query(requester_name: str, requester_email: str, query: str, submitted_at: str):
+    """Send a Help & Support query to the TechAdmin mailbox. Returns (sent, message)."""
+
+    return send_support_email(
+        requester_name=requester_name,
+        requester_email=requester_email,
+        query=query,
+        submitted_at=submitted_at,
+    )
+
+
+def get_support_recipient() -> str:
+    """Mailbox that receives Help & Support queries."""
+
+    return support_recipient()
+
+
+def load_request_result(request_id: str, requester_user_id: str | None = None):
+    """Load a previous request and its stored result for the chat history view."""
+
+    from App.db.operation_audit import get_request_result
+
+    if not requester_user_id:
+        return None
+    return get_request_result(requester_user_id, request_id)

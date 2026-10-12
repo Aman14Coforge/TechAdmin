@@ -10,6 +10,8 @@ a shared or production deployment: it also relaxes the sign-in check.
 """
 from __future__ import annotations
 
+import copy
+import os
 import re
 import secrets
 import time
@@ -108,50 +110,15 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-_SECRET_KEYS = {"new_password", "temporary_password", "password", "client_secret", "access_token", "refresh_token"}
-_DROP_KEYS = {"password_token", "masked_password", "_dashboard_secret", "_transient_password"}
-
-
-def _redact(value: Any) -> Any:
-    """Same rules as operation_audit.build_result_summary()."""
-    if isinstance(value, dict):
-        out = {}
-        for key, item in value.items():
-            k = str(key).casefold()
-            if k in _DROP_KEYS:
-                continue
-            out[key] = "[redacted]" if k in _SECRET_KEYS else _redact(item)
-        return out
-    if isinstance(value, list):
-        return [_redact(v) for v in value]
-    return value
-
-
 def _seed_history() -> None:
     if _HISTORY:
         return
     base = _now()
-    reset = {"success": True, "request_id": "seed-2", "intent": "password_reset", "confidence": 0.97,
-             "metadata": {"email": "migrationtest2@coforge.com"},
-             "message": "Password reset successful for MigrationTest2@Coforge.com.",
-             "tool_result": {"success": True, "message": "Password reset successful for MigrationTest2@Coforge.com.",
-                             "result": {"user_name": "MigrationTest2@Coforge.com", "employee_name": "Migration Test 2",
-                                        "manager_name": "Aman Gupta", "manager_email": "aman.gupta@coforge.com"}}}
-    lockout = {"success": True, "request_id": "seed-1", "intent": "failed_login_investigation", "confidence": 0.95,
-               "metadata": {"email": "migrationtest3@coforge.com"},
-               "tool_result": {"success": True, "message": "Investigation complete.",
-                               "result": {"report": _sample_report("migrationtest3@coforge.com")}}}
     _HISTORY.extend([
-        {"request_id": "seed-2", "request": "Reset password for migrationtest2@coforge.com", "operation": "password_reset",
-         "target": "migrationtest2@coforge.com", "status": "completed", "requested_at": base - timedelta(hours=1, minutes=3),
-         "has_result": True, "result": reset, "executed_at": base - timedelta(hours=1, minutes=3)},
-        {"request_id": "seed-1", "request": "Investigate account lockout for migrationtest3@coforge.com in the last 7 days",
-         "operation": "failed_login_investigation", "target": "migrationtest3@coforge.com", "status": "completed",
-         "requested_at": base - timedelta(days=1, hours=2), "has_result": True, "result": lockout,
-         "executed_at": base - timedelta(days=1, hours=2)},
-        {"request_id": "seed-0", "request": "Unlock account for migrationtest3@coforge.com", "operation": "account_unlock",
-         "target": "migrationtest3@coforge.com", "status": "awaiting_approval",
-         "requested_at": base - timedelta(days=1, hours=3), "has_result": False},
+        {"request_id": "seed-1", "request": "Account lockout check", "operation": "failed_login_investigation",
+         "target": "migrationtest3@coforge.com", "status": "completed", "requested_at": base - timedelta(days=1, hours=2)},
+        {"request_id": "seed-2", "request": "Reset password", "operation": "password_reset",
+         "target": "migrationtest2@coforge.com", "status": "completed", "requested_at": base - timedelta(hours=1, minutes=3)},
     ])
 
 
@@ -229,19 +196,6 @@ class PreviewFlowService:
 
     def run_query(self, user_query: str, *, confirmed: bool = False, request_id: str | None = None,
                   correlation_id: str | None = None, requester_id: str | None = None) -> Dict[str, Any]:
-        response = self._run(user_query, confirmed=confirmed, request_id=request_id,
-                             correlation_id=correlation_id, requester_id=requester_id)
-        # Mirror record_execution(): store the result only when a tool actually ran.
-        if isinstance(response.get("tool_result"), dict) and not response.get("confirmation_required"):
-            for item in _HISTORY:
-                if item["request_id"] == response.get("request_id"):
-                    item["result"] = _redact(response)
-                    item["has_result"] = True
-                    item["executed_at"] = _now()
-        return response
-
-    def _run(self, user_query: str, *, confirmed: bool = False, request_id: str | None = None,
-                  correlation_id: str | None = None, requester_id: str | None = None) -> Dict[str, Any]:
         del requester_id
         time.sleep(0.9)  # make the working state visible
         query = (user_query or "").strip()
@@ -267,7 +221,7 @@ class PreviewFlowService:
             response.update(success=False, error="user_not_found",
                             message=f"No directory profile matched {email}.",
                             tool_result={"success": False, "message": f"User not found: {email}", "result": None})
-            self._record(query, intent, email, "failed", request_id)
+            self._record(query, intent, email, "failed", request_id, response)
             return response
 
         needs_approval = intent in {"password_reset", "account_unlock", "add_user_to_group", "remove_user_from_group"}
@@ -307,17 +261,21 @@ class PreviewFlowService:
             msg = "Group membership updated."
 
         response.update(success=True, message=msg, tool_result={"success": True, "message": msg, "result": result})
-        self._record(query, intent, email, "completed", request_id)
+        self._record(query, intent, email, "completed", request_id, response)
         return response
 
     @staticmethod
-    def _record(query: str, intent: str, email: str, status: str, request_id: str | None = None) -> None:
+    def _record(query: str, intent: str, email: str, status: str, request_id: str | None = None,
+                response: Dict[str, Any] | None = None) -> None:
+        snapshot = _snapshot(response) if response is not None else None
         for item in _HISTORY:  # a confirmation retry updates the same audit row, like the real DB
             if request_id and item["request_id"] == request_id:
                 item["status"] = status
+                if snapshot is not None:
+                    item["_result"] = snapshot
                 return
         _HISTORY.insert(0, {"request_id": request_id or uuid.uuid4().hex, "request": query, "operation": intent,
-                            "target": email, "status": status, "requested_at": _now()})
+                            "target": email, "status": status, "requested_at": _now(), "_result": snapshot})
 
 
 # --- flow_service-compatible helpers -------------------------------------------------
@@ -351,27 +309,49 @@ def send_password_to_manager(token: str):
     return False, "Email delivery is disabled in preview mode.", ""
 
 
+def send_support_query(requester_name: str, requester_email: str, query: str, submitted_at: str):
+    del requester_name, requester_email, submitted_at
+    if not (query or "").strip():
+        return False, "Please describe your query before submitting."
+    return True, "Preview mode: your query was recorded but no email was sent to TechAdmin@coforge.com."
+
+
+def get_support_recipient() -> str:
+    return os.getenv("SUPPORT_EMAIL") or "TechAdmin@coforge.com"
+
+
+_SNAPSHOT_SENSITIVE = {"password", "new_password", "temporary_password", "password_token",
+                       "access_token", "refresh_token", "client_secret", "_transient_password"}
+
+
+def _snapshot(response: Dict[str, Any]) -> Dict[str, Any]:
+    """Password-safe copy of a response, like the result_summary snapshot in the real DB."""
+    def clean(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: clean(v) for k, v in value.items() if str(k).casefold() not in _SNAPSHOT_SENSITIVE}
+        if isinstance(value, list):
+            return [clean(v) for v in value]
+        return value
+    kept = {k: v for k, v in response.items() if k not in {"confirmation_required", "confirmation_prompt"}}
+    return clean(copy.deepcopy(kept))
+
+
 def get_user_request_history(user_id: str, limit: int = 20) -> list[dict[str, Any]]:
     del user_id
     _seed_history()
-    return [{k: v for k, v in item.items() if k != "result"} for item in _HISTORY[:limit]]
+    return [{k: v for k, v in item.items() if k != "_result"} for item in _HISTORY[:limit]]
 
 
-def load_request_result(user_id: str | None, request_id: str | None) -> Dict[str, Any] | None:
-    """Same shape as operation_audit.get_request_result()."""
-    del user_id
+def load_request_result(request_id: str, requester_user_id: str | None = None) -> Dict[str, Any] | None:
+    del requester_user_id
     _seed_history()
     for item in _HISTORY:
         if item["request_id"] == request_id:
-            response = item.get("result")
-            tool_result = (response or {}).get("tool_result") or {}
-            return {"request_id": item["request_id"], "request": item["request"], "operation": item["operation"],
-                    "target": item["target"], "status": item["status"].upper(), "requested_at": item["requested_at"],
-                    "completed_at": item.get("executed_at"), "has_execution": bool(response),
-                    "execution_status": ("SUCCEEDED" if (response or {}).get("success") else "FAILED") if response else None,
-                    "executed_at": item.get("executed_at"), "duration_ms": 900 if response else None,
-                    "error_message": None, "summary": tool_result.get("message") if response else None,
-                    "response": response, "truncated": False}
+            response = item.get("_result")
+            return {**{k: v for k, v in item.items() if k != "_result"},
+                    "response": copy.deepcopy(response) if response else None,
+                    "summary": "" if response else "Sample history entry — no stored result in preview mode.",
+                    "truncated": False, "execution_status": None, "error_message": None}
     return None
 
 

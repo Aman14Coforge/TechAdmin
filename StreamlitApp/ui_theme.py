@@ -359,19 +359,24 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 .ta-recent span { display:block; color: #8C9AAE; font-size: 11.5px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ta-recent.active { background: var(--ta-navy-2); border-left-color: var(--ta-orange); }
 .ta-recent .st { font-size: 10.5px; padding: 1px 6px; border-radius: 5px; margin-left: 6px; background: rgba(255,255,255,.06); color:#AFC0D3; }
-/* clickable recent-request items */
-[class*="st-key-sidehist_"] { position: relative; gap: 0 !important; border-radius: 10px; border-left: 2px solid transparent; margin-bottom: 2px; }
-[class*="st-key-sidehist_"]:hover { background: rgba(255,255,255,.04); }
-[class*="st-key-sidehist_"][class*="_active"] { background: var(--ta-navy-2); border-left-color: var(--ta-orange); }
-[data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton button { height: auto !important; min-height: 0; padding: 10px 12px 30px 12px !important;
-  border: none !important; box-shadow: none !important; justify-content: flex-start !important; text-align: left;
-  background: transparent !important; color: #E6EBF2 !important; font-size: 14px; border-radius: 10px; }
-[data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton, [data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton > div { width: 100%; }
-[data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton button > div, [data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton button > div > span { justify-content: flex-start !important; width: 100%; min-width: 0; }
-[data-testid="stSidebar"] [class*="st-key-sidehist_"] .stButton button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block !important; font-weight: 500; }
-.ta-recent-sub { margin-top: -36px; padding: 0 12px 14px 14px; color: #8C9AAE; font-size: 12px; pointer-events: none; position: relative;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ta-side-empty { color: #8C9AAE; font-size: 12.5px; padding: 4px 10px 8px; }
+/* Clickable history rows: the real button is stretched invisibly over the styled row */
+.stVerticalBlock[class*="st-key-recent_"], .stVerticalBlock[class*="st-key-hist_row_"] { position: relative; gap: 0 !important; }
+.stVerticalBlock[class*="st-key-recent_"] > .stElementContainer[class*="st-key-open_"],
+.stVerticalBlock[class*="st-key-hist_row_"] > .stElementContainer[class*="st-key-open_"] { position: absolute !important; inset: 0; z-index: 2; margin: 0 !important; height: 100% !important; }
+[class*="st-key-open_recent_"] .stButton, [class*="st-key-open_hist_"] .stButton,
+[class*="st-key-open_recent_"] .stButton > div, [class*="st-key-open_hist_"] .stButton > div,
+[class*="st-key-open_recent_"] .stButton span, [class*="st-key-open_hist_"] .stButton span { width: 100% !important; height: 100% !important; }
+[class*="st-key-open_recent_"] button, [class*="st-key-open_hist_"] button { width: 100% !important; height: 100% !important; min-height: 0 !important;
+  opacity: 0 !important; cursor: pointer; padding: 0 !important; border: none !important; }
+.stVerticalBlock[class*="st-key-recent_"]:hover .ta-recent { background: rgba(255,255,255,.06); }
+.stVerticalBlock[class*="st-key-hist_row_"]:hover .ta-hist { background: #FAFBFC; }
+.stVerticalBlock[class*="st-key-recent_"] [data-testid="stMarkdownContainer"], .stVerticalBlock[class*="st-key-recent_"] .stMarkdown,
+.stVerticalBlock[class*="st-key-recent_"] .stMarkdown > div, .stVerticalBlock[class*="st-key-hist_row_"] [data-testid="stMarkdownContainer"],
+.stVerticalBlock[class*="st-key-hist_row_"] .stMarkdown, .stVerticalBlock[class*="st-key-hist_row_"] .stMarkdown > div { margin-bottom: 0 !important; }
+.st-key-hist_card { gap: 0 !important; }
+.st-key-hist_card [data-testid="stMarkdownContainer"], .st-key-hist_card .stMarkdown, .st-key-hist_card .stMarkdown > div { margin-bottom: 0 !important; }
+.st-key-history_sidebar_scroll { gap: 2px !important; }
 
 .st-key-side_search [data-testid="stPopoverButton"] { background: transparent; border: none; color: #8C9AAE; min-height: 26px; height: 26px; padding: 0 6px; }
 .st-key-side_search [data-testid="stPopoverButton"]:hover { color:#fff; }
@@ -534,6 +539,22 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 [class*="st-key-qa_"] .stButton > button:hover { border-color: #F3B9AA; transform: translateY(-1px); }
 [class*="st-key-qa_"] .stButton > button [data-testid="stIconMaterial"] { color: var(--ta-orange); font-size: 22px; margin-bottom: 8px; }
 [class*="st-key-qa_"] .stButton > button p { font-size: 14px; font-weight: 600; color: var(--ta-ink); text-align:left; white-space: normal; }
+[class*="st-key-qa_"] .stButton > button p::after { display:block; margin-top:4px; font-size:12.5px; font-weight:400; color:var(--ta-muted); }
+.st-key-qa_lookup .stButton > button p::after { content:"View profile, status and groups"; }
+.st-key-qa_reset .stButton > button p::after { content:"Issue a temporary password"; }
+.st-key-qa_grant .stButton > button p::after { content:"Add a user to a group"; }
+.st-key-qa_revoke .stButton > button p::after { content:"Remove a user from a group"; }
+.st-key-qa_investigate .stButton > button p::after { content:"Review failed sign-ins"; }
+.st-key-qa_unlock .stButton > button p::after { content:"Clear an account lockout"; }
+/* Quick-action dialog: hide it as soon as it is submitted. Streamlit keeps a
+   submitted dialog on screen (faded) until the next script run finishes, which
+   can take a while for a live request. Once its fields are marked stale the
+   dialog is finished with, so hide the whole overlay. */
+.stDialog:has(.stElementContainer[class*="st-key-qa_email"][data-stale="true"]) { display: none !important; }
+/* Help & support box */
+.ta-support-head { display:flex; flex-direction:column; gap:4px; margin-bottom:6px; min-width:300px; }
+.ta-support-head strong { font-size:15px; color:var(--ta-ink); }
+.ta-support-head span { font-size:13px; color:var(--ta-muted); }
 [class*="st-key-security_quick_"] .stButton > button { height: 100px; min-height: 100px; padding: 14px 16px; box-sizing:border-box; overflow:hidden; background:#fff; border:1px solid var(--ta-line);
   border-radius:14px; box-shadow:var(--ta-shadow); display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-start; text-align:left; }
 [class*="st-key-security_quick_"] .stButton > button > div, [class*="st-key-security_quick_"] .stButton > button > div > span {
@@ -579,16 +600,10 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 /* Pages (history / directory) */
 .ta-page-head h1 { font-size: 26px; font-weight: 400; letter-spacing: -.02em; margin: 0 0 6px; padding: 0; color: var(--ta-ink); }
 .ta-page-head p { color: var(--ta-muted); font-size: 14px; margin: 0 0 20px; }
-.ta-hist { display:grid; grid-template-columns: 1.5fr 1fr .8fr .75fr .55fr; gap: 12px; align-items:center; padding: 13px 16px; border-bottom: 1px solid var(--ta-line-2); font-size: 13.5px; }
+.ta-hist { display:grid; grid-template-columns: 1.5fr 1fr .8fr .9fr; gap: 12px; align-items:center; padding: 13px 16px; border-bottom: 1px solid var(--ta-line-2); font-size: 13.5px; }
 .ta-hist.h { color: var(--ta-muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; font-weight: 600; background: #FAFBFC; border-bottom: 1px solid var(--ta-line); }
 .ta-hist .q { color: var(--ta-ink); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ta-hist .t { color: var(--ta-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-[class*="st-key-hrow_"] { padding: 10px 16px; border-bottom: 1px solid var(--ta-line-2); }
-[class*="st-key-hrow_"]:hover { background: #FAFBFC; }
-[class*="st-key-hrow_"] .q { color: var(--ta-ink); font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-[class*="st-key-hrow_"] .t { color: var(--ta-muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-[class*="st-key-hrow_"] .stButton button { height: 34px; min-height: 34px; font-size: 12.5px; padding: 0 10px; }
-.st-key-hist_card > div { gap: 0 !important; }
 .st-key-hist_card, .st-key-dir_card { background:#fff; border: 1px solid var(--ta-line); border-radius: var(--ta-radius); box-shadow: var(--ta-shadow); overflow:hidden; }
 .st-key-dir_card { padding: 20px 22px; }
 

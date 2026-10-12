@@ -22,7 +22,7 @@ section G and adds none of its own, and it is deliberately not registered in
 create_tables.py because the table already exists.
 
 Security note. As with operation_requests, nothing here holds a credential:
-result_summary and error_message are sanitized before they are written, and a
+result_summary (a redacted JSON snapshot) and error_message are sanitized before they are written, and a
 temporary password or access token must never reach this table.
 """
 
@@ -125,7 +125,10 @@ class OperationExecution(Base):
 
     duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
-    # Sanitized. Never the result payload itself, which can carry a password.
+    # JSON snapshot of the response (format "techadmin.result.v1") used by the
+    # chat history view. Credential keys and the password vault token are
+    # removed before writing, so it never holds a password. Older rows hold a
+    # plain-text summary instead; both are read by load_request_result().
     result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     error_code: Mapped[str | None] = mapped_column(String(150), nullable=True)
