@@ -913,6 +913,9 @@ if PREVIEW_MODE:
     get_config_status = _preview.get_config_status
     send_password_to_manager = _preview.send_password_to_manager
     get_user_request_history = _preview.get_user_request_history
+    send_support_query = _preview.send_support_query
+    get_support_recipient = _preview.get_support_recipient
+    load_request_result = _preview.load_request_result
     authorize_claims = None
 
     def extract_display_name(claims: dict[str, Any]) -> str:
@@ -925,7 +928,10 @@ else:
         check_ollama,
         email_is_configured,
         get_config_status,
+        get_support_recipient,
+        load_request_result,
         send_password_to_manager,
+        send_support_query,
     )
     from App.db.login_authorization import authorize_claims, extract_display_name  # noqa: E402
     from App.db.operation_audit import get_user_request_history  # noqa: E402
@@ -1466,6 +1472,7 @@ def init_state() -> None:
     st.session_state.setdefault("page", "assistant")
     st.session_state.setdefault("history_filter", "")
     st.session_state.setdefault("quick_action", None)
+    st.session_state.setdefault("viewing_request_id", None)
 
 
 def clear_conversation_state() -> None:
@@ -1475,6 +1482,7 @@ def clear_conversation_state() -> None:
     st.session_state.pending_confirmation = None
     st.session_state.pending_run = None
     st.session_state.quick_action = None
+    st.session_state.viewing_request_id = None
 
 
 def access_info() -> dict[str, Any]:
@@ -1649,7 +1657,94 @@ def new_conversation() -> None:
     st.session_state.conversation = []
     st.session_state.pending_confirmation = None
     st.session_state.pending_run = None
+    st.session_state.viewing_request_id = None
     st.session_state.page = "assistant"
+
+
+# =============================================================================
+# Chat history: re-open a previous request and show its stored result
+# =============================================================================
+
+def _iso(value: Any) -> str:
+    if isinstance(value, datetime):
+        return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).isoformat()
+    return str(value or now_iso())
+
+
+def _history_fallback_message(record: dict[str, Any]) -> str:
+    status = str(record.get("status") or "").upper()
+    if status == "AWAITING_APPROVAL":
+        return "This request was waiting for approval and never ran, so there is no result. Run it again to continue."
+    if status == "REJECTED":
+        return "This request was blocked by TechAdmin's safety checks, so nothing ran."
+    if status == "RECEIVED":
+        return "This request didn't finish, so there is no saved result."
+    if record.get("error_message"):
+        return f"The request failed: {record['error_message']}"
+    if record.get("summary"):
+        return f"Saved summary: {record['summary']}"
+    return ("No saved result is available for this request. Results are saved for requests "
+            "run after chat history was enabled.")
+
+
+def open_history_item(item: dict[str, Any]) -> None:
+    """Load a previous request and its stored result into the conversation view."""
+    if item.get("agent") == "security":
+        st.session_state.patch_query_prefill = item.get("request") or ""
+        st.session_state.page = "security"
+        st.rerun()
+
+    request_id = item.get("request_id")
+    if not request_id:
+        st.session_state.page = "assistant"
+        st.rerun()
+
+    record = load_request_result(str(request_id), access_info().get("user_id"))
+    if not isinstance(record, dict):
+        st.toast("That request's result couldn't be loaded.", icon=":material/error:")
+        return
+
+    stored = record.get("response")
+    if isinstance(stored, dict) and stored:
+        response = copy.deepcopy(stored)
+    else:
+        response = {"success": None, "message": _history_fallback_message(record),
+                    "intent": item.get("operation") or None, "request_id": record.get("request_id")}
+    # A restored result is read-only: never show approve buttons or delivery actions.
+    for key in ("confirmation_required", "confirmation_prompt", "clarification_required"):
+        response.pop(key, None)
+    response["restored_from_history"] = True
+
+    ts = _iso(record.get("requested_at"))
+    query = record.get("request") or item.get("request") or ""
+    st.session_state.conversation = [
+        {"role": "user", "content": query, "ts": ts},
+        {"role": "assistant", "content": redact_sensitive_history(response), "ts": ts, "query": query,
+         "restored": True, "restored_status": record.get("status"), "truncated": bool(record.get("truncated"))},
+    ]
+    st.session_state.pending_confirmation = None
+    st.session_state.pending_run = None
+    st.session_state.queued_query = None
+    st.session_state.viewing_request_id = str(request_id)
+    st.session_state.page = "assistant"
+    st.rerun()
+
+
+def render_restored_note(turn: dict[str, Any], idx: int) -> None:
+    when = turn.get("ts")
+    try:
+        when_text = datetime.fromisoformat(str(when)).astimezone().strftime("%d %b %Y, %H:%M")
+    except ValueError:
+        when_text = str(when or "")
+    extra = " The detailed output was too large to keep, so only the summary is shown." if turn.get("truncated") else ""
+    left, right = st.columns([5, 1.3], vertical_alignment="center")
+    left.caption(f":material/history: Saved result from {when_text}. This is a record of what happened then, "
+                 f"not live data.{extra}")
+    query = str(turn.get("query") or "")
+    if query and right.button("Run again", key=f"rerun_{idx}", icon=":material/refresh:", width="stretch"):
+        st.session_state.viewing_request_id = None
+        queue_run(query)
+        st.rerun()
 
 
 # =============================================================================
@@ -2013,11 +2108,18 @@ def assistant_summary(response: Dict[str, Any]) -> str:
 
 def render_assistant_turn(turn: dict[str, Any], idx: int) -> None:
     response = turn.get("content") if isinstance(turn.get("content"), dict) else {}
+    summary = assistant_summary(response)
+    if turn.get("restored") and response.get("intent") == "password_reset" and response.get("success") is not False:
+        summary = "The password was reset. The temporary password itself is never kept in history."
+    elif turn.get("restored") and response.get("success") is None:
+        summary = str(response.get("message") or summary)
     html_block(
         f'<div class="ta-asst-head"><div class="ta-icon-tile">{icon_sparkle(18, "#fff")}</div><div>'
-        f'<div class="who">TechAdmin AI</div><div class="msg">{escape(assistant_summary(response))}</div></div></div>'
+        f'<div class="who">TechAdmin AI</div><div class="msg">{escape(summary)}</div></div></div>'
     )
     with st.container(key=f"amsg_{idx}"):
+        if turn.get("restored"):
+            render_restored_note(turn, idx)
         intent = str(response.get("intent") or "")
         tool_result = response.get("tool_result")
         result = tool_result.get("result") if isinstance(tool_result, dict) else None
@@ -2339,9 +2441,9 @@ def render_sidebar(
                         '</div>'
                     )
 
-            request_items: list[str] = []
+            viewing = st.session_state.get("viewing_request_id")
 
-            for item in shown:
+            for index, item in enumerate(shown):
                 subtitle = " · ".join(
                     part
                     for part in (
@@ -2360,22 +2462,17 @@ def render_sidebar(
                     if part
                 )
 
-                request_items.append(
-                    '<div '
-                    'class="ta-recent" '
-                    f'title="{escape(str(item.get("request") or ""))}">'
-                    '<strong>'
-                    f'{escape(_history_title(item))}'
-                    '</strong>'
-                    '<span>'
-                    f'{escape(subtitle)}'
-                    '</span>'
-                    '</div>'
-                )
-
-            html_block(
-                "".join(request_items)
-            )
+                active = bool(item.get("request_id")) and str(item.get("request_id")) == viewing
+                with st.container(key=f"recent_{index}"):
+                    html_block(
+                        f'<div class="ta-recent{" active" if active else ""}" '
+                        f'title="{escape(str(item.get("request") or ""))}">'
+                        f'<strong>{escape(_history_title(item))}</strong>'
+                        f'<span>{escape(subtitle)}</span>'
+                        '</div>'
+                    )
+                    if st.button("Open", key=f"open_recent_{index}", width="stretch"):
+                        open_history_item(item)
 
 
 def system_health() -> tuple[bool, list[tuple[str, Any]]]:
@@ -2392,6 +2489,51 @@ def system_health() -> tuple[bool, list[tuple[str, Any]]]:
         ("Model", status.get("model_name")),
     ]
     return graph_ok and bool(status.get("config_valid")), rows
+
+
+SUPPORT_COOLDOWN_SECONDS = 60
+
+
+def render_help_support(claims: dict[str, Any]) -> None:
+    """Help & support box: collect a query and email it to the TechAdmin mailbox."""
+    recipient = get_support_recipient()
+    html_block(
+        '<div class="ta-support-head"><strong>Help &amp; support</strong>'
+        f'<span>Describe your issue or question and we\'ll email it to <b>{escape(recipient)}</b>.</span></div>'
+    )
+    name = str(claims.get("name") or claims.get("preferred_username") or "").strip()
+    email = str(claims.get("preferred_username") or claims.get("email") or "").strip()
+    with st.form("support_form", border=False, clear_on_submit=True):
+        query = st.text_area(
+            "Your query",
+            placeholder="E.g. The password reset for a user failed with an error…",
+            height=130,
+            max_chars=4000,
+            key="support_query",
+        )
+        submitted = st.form_submit_button("Submit", type="primary", icon=":material/send:", width="stretch")
+    if submitted:
+        last_sent = float(st.session_state.get("support_last_sent") or 0)
+        wait = int(SUPPORT_COOLDOWN_SECONDS - (time.time() - last_sent))
+        if not query.strip():
+            st.error("Please describe your query before submitting.")
+        elif wait > 0:
+            st.warning(f"Your previous query was just sent. Please wait {wait}s before sending another.")
+        else:
+            with st.spinner("Sending your query…"):
+                sent, message = send_support_query(
+                    requester_name=name,
+                    requester_email=email,
+                    query=query.strip(),
+                    submitted_at=datetime.now().astimezone().strftime("%d %b %Y, %H:%M %Z"),
+                )
+            if sent:
+                st.session_state.support_last_sent = time.time()
+                st.success(message)
+            else:
+                st.error(message)
+    if "@" in email:
+        st.caption(f"Replies will go to {email}.")
 
 
 def render_topbar(claims: dict[str, Any]) -> None:
@@ -2411,21 +2553,17 @@ def render_topbar(claims: dict[str, Any]) -> None:
         actions = right.container(horizontal=True, horizontal_alignment="right", vertical_alignment="center",
                                   gap="small", wrap=False, key="top_actions")
         with actions:
-            with st.popover(":material/help_outline:", help="Help and system status"):
-                st.markdown("**Try asking**")
-                for i, example in enumerate(EXAMPLES):
-                    if st.button(example, key=f"example_{i}", width="stretch"):
-                        queue_run(example)
-                        st.rerun()
-                st.markdown("**System status**")
-                html_block(kv_grid(rows, single=True))
-                if st.button("Test Ollama connection", width="stretch", key="test_ollama"):
-                    connected, message = check_ollama()
-                    st.session_state.ollama_check_result = {"connected": connected, "message": message}
-                result = st.session_state.ollama_check_result
-                if isinstance(result, dict):
-                    (st.success if result["connected"] else st.error)(result["message"])
-                st.caption(f"Logs: {LOG_FILE}")
+            with st.popover(":material/help_outline:", help="Help & support"):
+                render_help_support(claims)
+                with st.expander("System status", icon=":material/monitor_heart:"):
+                    html_block(kv_grid(rows, single=True))
+                    if st.button("Test Ollama connection", width="stretch", key="test_ollama"):
+                        connected, message = check_ollama()
+                        st.session_state.ollama_check_result = {"connected": connected, "message": message}
+                    result = st.session_state.ollama_check_result
+                    if isinstance(result, dict):
+                        (st.success if result["connected"] else st.error)(result["message"])
+                    st.caption(f"Logs: {LOG_FILE}")
             pending = st.session_state.get("pending_confirmation")
             with st.popover(":material/notifications:" if not pending else ":material/notifications_active:",
                             help="Notifications"):
@@ -2456,25 +2594,38 @@ def render_topbar(claims: dict[str, Any]) -> None:
 # Pages
 # =============================================================================
 
+# (key, title, icon, query template, needs_group)
 QUICK_ACTIONS = [
-    ("lookup", "Look up a user", ":material/person_search:", "Get user details for {email}"),
-    ("unlock", "Unlock an account", ":material/lock_open:", "Unlock account for {email}"),
+    ("lookup", "Get user details", ":material/person_search:", "Get user details for {email}", False),
+    ("reset", "Reset password", ":material/key:", "Reset password for {email}", False),
+    ("grant", "Grant access", ":material/group_add:", "Add user {email} to group {group}", True),
+    ("revoke", "Revoke access", ":material/group_remove:", "Remove user {email} from group {group}", True),
     ("investigate", "Investigate account lockout", ":material/policy:",
-     "Investigate account lockout for {email} in the last 24 hours"),
+     "Investigate account lockout for {email} in the last 24 hours", False),
+    ("unlock", "Unlock account", ":material/lock_open:", "Unlock account for {email}", False),
 ]
+QUICK_ACTIONS_PER_ROW = 3
 
 
 @st.dialog("Who is this for?")
-def quick_action_dialog(title: str, template: str) -> None:
+def quick_action_dialog(title: str, template: str, needs_group: bool = False) -> None:
     st.caption(title)
     with st.form("qa_form", border=False):
         email = st.text_input("Work email or username", placeholder="name@coforge.com", key="qa_email")
+        group = ""
+        if needs_group:
+            group = st.text_input("Group name", placeholder="e.g. TechAI_Group", key="qa_group")
         submitted = st.form_submit_button("Continue", type="primary", width="stretch")
     if submitted:
-        if not email.strip():
+        email = email.strip()
+        group = group.strip()
+        if not email:
             st.error("Enter the user's work email or username.")
             return
-        queue_run(template.format(email=email.strip()))
+        if needs_group and not group:
+            st.error("Enter the name of the group.")
+            return
+        queue_run(template.format(email=email, group=group))
         st.rerun()
 
 
@@ -2525,15 +2676,25 @@ def page_assistant(claims: dict[str, Any]) -> None:
                         new_conversation()
                         st.rerun()
 
+        # One fixed slot for the quick actions. It is always created at the same
+        # position and explicitly emptied once a conversation starts, so the
+        # boxes disappear immediately instead of lingering (faded) while a
+        # request is running.
+        quick_slot = st.empty()
         if not conversation and not st.session_state.pending_run:
-            html_block('<div class="ta-hello"><h3>Quick actions</h3>'
-                       '<p>Pick a task, or describe what you need in the box below. Changes always pause for your approval.</p></div>')
-            cols = st.columns(len(QUICK_ACTIONS))
-            for col, (key, title, icon, template) in zip(cols, QUICK_ACTIONS):
-                with col:
-                    with st.container(key=f"qa_{key}"):
-                        if st.button(title, key=f"qa_btn_{key}", icon=icon, width="stretch"):
-                            quick_action_dialog(title, template)
+            with quick_slot.container():
+                html_block('<div class="ta-hello"><h3>Quick actions</h3>'
+                           '<p>Pick a task, or describe what you need in the box below. Changes always pause for your approval.</p></div>')
+                for start in range(0, len(QUICK_ACTIONS), QUICK_ACTIONS_PER_ROW):
+                    row = QUICK_ACTIONS[start:start + QUICK_ACTIONS_PER_ROW]
+                    cols = st.columns(QUICK_ACTIONS_PER_ROW)
+                    for col, (key, title, icon, template, needs_group) in zip(cols, row):
+                        with col:
+                            with st.container(key=f"qa_{key}"):
+                                if st.button(title, key=f"qa_btn_{key}", icon=icon, width="stretch"):
+                                    quick_action_dialog(title, template, needs_group)
+        else:
+            quick_slot.empty()
 
         for idx, turn in enumerate(conversation):
             if turn.get("role") == "user":
@@ -2564,22 +2725,25 @@ def page_assistant(claims: dict[str, Any]) -> None:
 def page_history(history: list[dict[str, Any]]) -> None:
     with st.container(key="content"):
         html_block('<div class="ta-page-head"><h1>Your History</h1>'
-                   '<p>Your recent identity requests, as recorded in the operation audit log.</p></div>')
+                   '<p>Your recent identity requests, as recorded in the operation audit log. '
+                   'Select a request to see its result.</p></div>')
         with st.container(height=520, border=False, key="history_page_scroll"):
             with st.container(key="hist_card"):
-                rows = ['<div class="ta-hist h"><span>Request</span><span>Target</span><span>Status</span><span>When</span></div>']
-                for item in history:
+                html_block('<div class="ta-hist h"><span>Request</span><span>Target</span><span>Status</span><span>When</span></div>')
+                for index, item in enumerate(history):
                     when = item.get("requested_at")
                     when_text = when.astimezone().strftime("%d %b, %H:%M") if isinstance(when, datetime) else time_ago(when)
-                    rows.append(
-                        f'<div class="ta-hist"><span class="q" title="{escape(str(item.get("request") or ""))}">'
-                        f'{escape(_history_title(item))}<br><span class="t">{escape(str(item.get("request") or ""))}</span></span>'
-                        f'<span class="t">{escape(str(item.get("target") or "—"))}</span>'
-                        f'<span>{_status_badge(item.get("status"))}</span><span class="t">{escape(when_text)}</span></div>'
-                    )
+                    with st.container(key=f"hist_row_{index}"):
+                        html_block(
+                            f'<div class="ta-hist"><span class="q" title="{escape(str(item.get("request") or ""))}">'
+                            f'{escape(_history_title(item))}<br><span class="t">{escape(str(item.get("request") or ""))}</span></span>'
+                            f'<span class="t">{escape(str(item.get("target") or "—"))}</span>'
+                            f'<span>{_status_badge(item.get("status"))}</span><span class="t">{escape(when_text)}</span></div>'
+                        )
+                        if st.button("Open", key=f"open_hist_{index}", width="stretch"):
+                            open_history_item(item)
                 if not history:
-                    rows.append('<div class="ta-empty" style="padding:22px 16px">No requests recorded yet.</div>')
-                html_block("".join(rows))
+                    html_block('<div class="ta-empty" style="padding:22px 16px">No requests recorded yet.</div>')
         st.write("")
         if st.session_state.conversation:
             data = json.dumps(redact_sensitive_history(copy.deepcopy(st.session_state.conversation)),
@@ -2734,6 +2898,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-

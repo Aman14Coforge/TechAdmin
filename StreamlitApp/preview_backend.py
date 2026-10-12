@@ -10,6 +10,8 @@ a shared or production deployment: it also relaxes the sign-in check.
 """
 from __future__ import annotations
 
+import copy
+import os
 import re
 import secrets
 import time
@@ -219,7 +221,7 @@ class PreviewFlowService:
             response.update(success=False, error="user_not_found",
                             message=f"No directory profile matched {email}.",
                             tool_result={"success": False, "message": f"User not found: {email}", "result": None})
-            self._record(query, intent, email, "failed")
+            self._record(query, intent, email, "failed", request_id, response)
             return response
 
         needs_approval = intent in {"password_reset", "account_unlock", "add_user_to_group", "remove_user_from_group"}
@@ -259,17 +261,21 @@ class PreviewFlowService:
             msg = "Group membership updated."
 
         response.update(success=True, message=msg, tool_result={"success": True, "message": msg, "result": result})
-        self._record(query, intent, email, "completed", request_id)
+        self._record(query, intent, email, "completed", request_id, response)
         return response
 
     @staticmethod
-    def _record(query: str, intent: str, email: str, status: str, request_id: str | None = None) -> None:
+    def _record(query: str, intent: str, email: str, status: str, request_id: str | None = None,
+                response: Dict[str, Any] | None = None) -> None:
+        snapshot = _snapshot(response) if response is not None else None
         for item in _HISTORY:  # a confirmation retry updates the same audit row, like the real DB
             if request_id and item["request_id"] == request_id:
                 item["status"] = status
+                if snapshot is not None:
+                    item["_result"] = snapshot
                 return
         _HISTORY.insert(0, {"request_id": request_id or uuid.uuid4().hex, "request": query, "operation": intent,
-                            "target": email, "status": status, "requested_at": _now()})
+                            "target": email, "status": status, "requested_at": _now(), "_result": snapshot})
 
 
 # --- flow_service-compatible helpers -------------------------------------------------
@@ -303,10 +309,50 @@ def send_password_to_manager(token: str):
     return False, "Email delivery is disabled in preview mode.", ""
 
 
+def send_support_query(requester_name: str, requester_email: str, query: str, submitted_at: str):
+    del requester_name, requester_email, submitted_at
+    if not (query or "").strip():
+        return False, "Please describe your query before submitting."
+    return True, "Preview mode: your query was recorded but no email was sent to TechAdmin@coforge.com."
+
+
+def get_support_recipient() -> str:
+    return os.getenv("SUPPORT_EMAIL") or "TechAdmin@coforge.com"
+
+
+_SNAPSHOT_SENSITIVE = {"password", "new_password", "temporary_password", "password_token",
+                       "access_token", "refresh_token", "client_secret", "_transient_password"}
+
+
+def _snapshot(response: Dict[str, Any]) -> Dict[str, Any]:
+    """Password-safe copy of a response, like the result_summary snapshot in the real DB."""
+    def clean(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: clean(v) for k, v in value.items() if str(k).casefold() not in _SNAPSHOT_SENSITIVE}
+        if isinstance(value, list):
+            return [clean(v) for v in value]
+        return value
+    kept = {k: v for k, v in response.items() if k not in {"confirmation_required", "confirmation_prompt"}}
+    return clean(copy.deepcopy(kept))
+
+
 def get_user_request_history(user_id: str, limit: int = 20) -> list[dict[str, Any]]:
     del user_id
     _seed_history()
-    return _HISTORY[:limit]
+    return [{k: v for k, v in item.items() if k != "_result"} for item in _HISTORY[:limit]]
+
+
+def load_request_result(request_id: str, requester_user_id: str | None = None) -> Dict[str, Any] | None:
+    del requester_user_id
+    _seed_history()
+    for item in _HISTORY:
+        if item["request_id"] == request_id:
+            response = item.get("_result")
+            return {**{k: v for k, v in item.items() if k != "_result"},
+                    "response": copy.deepcopy(response) if response else None,
+                    "summary": "" if response else "Sample history entry — no stored result in preview mode.",
+                    "truncated": False, "execution_status": None, "error_message": None}
+    return None
 
 
 def authorize_preview(claims: dict[str, Any]) -> dict[str, Any]:
