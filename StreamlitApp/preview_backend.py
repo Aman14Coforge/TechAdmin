@@ -38,6 +38,7 @@ _DIRECTORY: dict[str, dict[str, Any]] = {
         "PasswordExpired": False,
         "PasswordNeverExpires": False,
         "PasswordLastSet": "2026-08-21T09:14:00Z",
+        "PasswordExpiryDate": "2026-11-19 09:14:00",
         "MfaStatus": "Enforced",
         "PrimaryGroupName": "Domain Users",
         "DirectGroups": [
@@ -80,6 +81,7 @@ _DIRECTORY: dict[str, dict[str, Any]] = {
         "LockedOut": False,
         "PasswordExpired": True,
         "PasswordNeverExpires": False,
+        "PasswordExpiryDate": "2026-09-28 17:30:00",
         "PrimaryGroupName": "Domain Users",
         "DirectGroups": [],
         "NestedGroups": [],

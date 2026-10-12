@@ -526,6 +526,7 @@ try {
         "PasswordExpired"
         "PasswordLastSet"
         "PasswordNeverExpires"
+        "msDS-UserPasswordExpiryTimeComputed"
         "CannotChangePassword"
         "PasswordNotRequired"
         "AccountExpirationDate"
@@ -759,6 +760,14 @@ try {
         $primaryGroupName = $primaryGroups[0].Name
     }
 
+    $passwordExpiryDate = $null
+
+    if (-not [bool]$user.PasswordNeverExpires) {
+        # Never-expiring values (0 / Int64.MaxValue) convert to $null.
+        $passwordExpiryDate = ConvertFrom-FileTimeValue `
+            -Value $user.'msDS-UserPasswordExpiryTimeComputed'
+    }
+
     $result = [ordered]@{
         Success = $true
         Name = $user.Name
@@ -784,6 +793,8 @@ try {
         PasswordLastSet = ConvertTo-IsoDateTime `
             -Value $user.PasswordLastSet
         PasswordNeverExpires = [bool]$user.PasswordNeverExpires
+        PasswordExpiryDate = ConvertTo-IsoDateTime `
+            -Value $passwordExpiryDate
         CannotChangePassword = [bool]$user.CannotChangePassword
         PasswordNotRequired = [bool]$user.PasswordNotRequired
         AccountExpirationDate = ConvertTo-IsoDateTime `
