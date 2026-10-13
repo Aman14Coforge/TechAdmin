@@ -16,7 +16,7 @@ _COFORGE_LOGO_DATA_URI = (
   "data:image/svg+xml;base64,"
   + base64.b64encode(_COFORGE_LOGO_PATH.read_bytes()).decode("ascii")
 )
-_OPERATIONS_ICON_PATH = Path(__file__).resolve().parent.parent / "logo" / "techadmin-skull-transparent-BRJ5gMEk.png"
+_OPERATIONS_ICON_PATH = Path(__file__).resolve().parent.parent / "logs" / "techadmin-skull-transparent-BRJ5gMEk.png"
 _OPERATIONS_ICON_DATA_URI = (
     "data:image/png;base64,"
     + base64.b64encode(_OPERATIONS_ICON_PATH.read_bytes()).decode("ascii")

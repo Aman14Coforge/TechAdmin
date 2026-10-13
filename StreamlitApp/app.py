@@ -886,7 +886,7 @@ from typing import Any, Callable, Dict, Iterable
 
 import streamlit as st
 
-OPERATIONS_ICON_PATH = Path(__file__).resolve().parent.parent / "logo" / "techadmin-skull-transparent-BRJ5gMEk.png"
+OPERATIONS_ICON_PATH = Path(__file__).resolve().parent.parent / "logs" / "techadmin-skull-transparent-BRJ5gMEk.png"
 
 st.set_page_config(
     page_title="TechAdmin AI",
