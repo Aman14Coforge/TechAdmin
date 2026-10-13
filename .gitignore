@@ -53,8 +53,7 @@ Thumbs.db
 # Streamlit secrets
 .streamlit/secrets.toml
 
-# Local branding assets
-logo/
+
 
 # Testing & Coverage
 .pytest_cache/
