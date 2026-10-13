@@ -16,7 +16,7 @@ _COFORGE_LOGO_DATA_URI = (
   "data:image/svg+xml;base64,"
   + base64.b64encode(_COFORGE_LOGO_PATH.read_bytes()).decode("ascii")
 )
-_OPERATIONS_ICON_PATH = Path(__file__).resolve().parent.parent / "Logo" / "icons8-operations-60.png"
+_OPERATIONS_ICON_PATH = Path(__file__).resolve().parent.parent / "logo" / "techadmin-skull-transparent-BRJ5gMEk.png"
 _OPERATIONS_ICON_DATA_URI = (
     "data:image/png;base64,"
     + base64.b64encode(_OPERATIONS_ICON_PATH.read_bytes()).decode("ascii")
@@ -409,7 +409,10 @@ section[data-testid="stSidebar"] > div { background: var(--ta-navy); }
 .st-key-topbar [data-testid="stHorizontalBlock"] { align-items: center; }
 .ta-top-brand { display:flex; align-items:center; gap: 12px; padding: 2px 0; }
 .ta-top-brand img, .ta-top-brand svg { width: 38px !important; height: 38px !important; flex: none; }
-.ta-topbar-title { display:flex; align-items:center; gap: 8px; font-size: 17px; color: var(--ta-ink); font-weight: 600; line-height: 1.25; }
+.ta-topbar-title { display:flex; align-items:center; gap: 0; font-size: 17px; color: var(--ta-ink); font-weight: 600; line-height: 1.25; }
+.ta-title-tech { color: var(--ta-orange); }
+.ta-title-admin { color: var(--ta-navy-3); }
+.ta-topbar-title .ta-badge { margin-left: 8px; }
 .ta-topbar-sub { color: var(--ta-muted); font-size: 12px; line-height: 1.3; margin-top: 2px; }
 .ta-topbar-status { display:flex; align-items:center; gap: 6px; color: var(--ta-muted); font-size: 11.5px; margin-top: 2px; }
 .ta-topbar-status.warn .ta-dot { background: #E0A100; }
@@ -634,7 +637,7 @@ def inject_login_css() -> None:
 def inject_app_css() -> None:
     st.markdown(APP_CSS, unsafe_allow_html=True)
 
-# Security Agent navigation styles added by integration script.
+# Patch Agent navigation styles added by integration script.
 SECURITY_AGENT_CSS = r"""
 <style>
 /* SECURITY_AGENT_NAV */

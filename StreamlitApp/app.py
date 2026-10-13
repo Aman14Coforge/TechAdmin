@@ -886,7 +886,7 @@ from typing import Any, Callable, Dict, Iterable
 
 import streamlit as st
 
-OPERATIONS_ICON_PATH = Path(__file__).resolve().parent.parent / "Logo" / "icons8-operations-60.png"
+OPERATIONS_ICON_PATH = Path(__file__).resolve().parent.parent / "logo" / "techadmin-skull-transparent-BRJ5gMEk.png"
 
 st.set_page_config(
     page_title="TechAdmin AI",
@@ -1083,7 +1083,7 @@ INTENT_TITLES = {
 ROLE_TITLES = {"helpdesk": "Helpdesk operator", "admin": "Operations admin", "operations_admin": "Operations admin"}
 PAGES = [
     ("assistant", "Identity Agent", ":material/smart_toy:"),
-    ("security", "Security Agent", ":material/security:"),
+    ("security", "Patch Agent", ":material/security:"),
     ("history", "Your History", ":material/history:"),
 ]
 
@@ -1263,12 +1263,12 @@ def clear_local_authentication_state() -> None:
 HERO_HTML = f"""
 <div class="ta-hero">
   <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
-    <div class="ta-hero-brand">{coforge_wordmark(40)}</div>
+    <div class="ta-hero-brand">{coforge_wordmark(76)}</div>
   <div class="content">
-        <div class="ta-hero-product">{operations_icon(42)}<div><div class="ta-hero-product-name"><span>Tech</span>Admin</div>
+        <div class="ta-hero-product">{operations_icon(56)}<div><div class="ta-hero-product-name"><span>Tech</span>Admin</div>
         <div class="ta-hero-product-subtitle">Autonomous Assistant</div></div></div>
-        <h1>Intelligent operations,<br>made effortless.</h1>
-        <p class="lead">We’re agentifying identity operations—taking the mundane, repetitive work off your plate with secure, auditable assistance.</p>
+        <h1>Intelligent actions,<br>made effortless.</h1>
+        <p class="lead">We’re agentifying manual operations—taking the mundane, repetitive work off your plate with secure, auditable assistance.</p>
   </div>
     <div class="ta-hero-footer"><span>Plan</span><i></i><span>Secure</span><i></i><span>Implement</span><i></i><span>Deliver</span></div>
 </div>
@@ -1282,16 +1282,16 @@ def render_auth_shell(body: Callable[[], None]) -> None:
     inject_login_css()
     st.markdown("""
         <style>
-            .ta-hero-brand { position:relative; z-index:1; }
+            .ta-hero-brand { position:relative; z-index:1; margin-left:-18px; }
             .ta-hero .content { z-index:1; }
             .ta-hero-product { display:flex; align-items:center; gap:14px; }
-            .ta-hero-product-name { color:#fff; font-size:24px; line-height:1.1; font-weight:600; letter-spacing:-.02em; }
+            .ta-hero-product-name { color:#fff; font-size:30px; line-height:1.1; font-weight:600; letter-spacing:-.02em; }
             .ta-hero-product-name span { color:#EF5B3F; }
             .ta-hero-product-subtitle { color:#B9C3D1; font-size:13.5px; margin-top:3px; }
             .ta-hero h1 { margin-top:26px; }
             .ta-hero p.lead { max-width:460px; }
             .ta-hero-footer { position:relative; z-index:1; display:flex; flex-wrap:wrap; align-items:center; gap:12px;
-                color:#C8D1DD; font-size:12.5px; font-weight:500; letter-spacing:.02em; }
+                color:#C8D1DD; font-size:15px; font-weight:500; letter-spacing:.02em; }
             .ta-hero-footer i { width:1px; height:16px; background:#EF5B3F; display:inline-block; }
             .ta-login-head h2 { margin-top:0; }
         </style>
@@ -1636,13 +1636,13 @@ def handle_input(query: str) -> None:
     st.rerun()
 
 
-@st.dialog("Open Security Agent?")
+@st.dialog("Open Patch Agent?")
 def confirm_security_redirect() -> None:
     query=str(st.session_state.get("security_redirect_pending_query") or "")
-    st.write("This looks like an endpoint-security request. Open Security Agent?")
+    st.write("This looks like an endpoint-security request. Open Patch Agent?")
     if query:st.caption(query)
     yes,no=st.columns(2)
-    if yes.button("Open Security Agent",type="primary",width="stretch",key="identity_to_security_confirm"):
+    if yes.button("Open Patch Agent",type="primary",width="stretch",key="identity_to_security_confirm"):
         st.session_state.page="security"
         st.session_state.security_redirect_query=query
         st.session_state.security_redirect_pending_query=None
@@ -2314,7 +2314,7 @@ def render_sidebar(
 
                         st.rerun()
 
-                # Security Agent navigation
+                # Patch Agent navigation
                 with st.container(
                     key=(
                         "agent_security_active"
@@ -2323,7 +2323,7 @@ def render_sidebar(
                     )
                 ):
                     if st.button(
-                        "Security Agent",
+                        "Patch Agent",
                         key="navbtn_security",
                         icon=":material/security:",
                         width="stretch",
@@ -2334,7 +2334,7 @@ def render_sidebar(
 
                         # Do not carry an Identity Agent
                         # execution or approval into
-                        # Security Agent.
+                        # Patch Agent.
                         st.session_state.pending_run = None
                         st.session_state.pending_confirmation = (
                             None
@@ -2545,7 +2545,8 @@ def render_topbar(claims: dict[str, Any]) -> None:
             if PREVIEW_MODE:
                 badges += ' <span class="ta-badge warn">Preview · sample data</span>'
             html_block(
-                f'<div class="ta-top-brand">{operations_icon(36)}<div><div class="ta-topbar-title">TechAdmin{badges}</div>'
+                f'<div class="ta-top-brand">{operations_icon(48)}<div><div class="ta-topbar-title">'
+                f'<span class="ta-title-tech">Tech</span><span class="ta-title-admin">Admin</span>{badges}</div>'
                 '<div class="ta-topbar-sub">Autonomous Assistant</div></div></div>'
             )
             # initials() only yields letters, so it is safe inside a CSS string
@@ -2667,7 +2668,7 @@ def page_assistant(claims: dict[str, Any]) -> None:
             left, right = st.columns([5, 1.4], vertical_alignment="center")
             with left:
                 sub = ("Here's the result from your latest identity request." if conversation
-                       else "What would you like to take care of today?")
+                       else "How can I help you today?")
                 html_block(f'<div class="ta-greet"><h1>{greeting()}, {escape(first_name(claims.get("name") or "TechAdmin"))}</h1>'
                            f'<p>{sub}</p></div>')
             with right:
@@ -2848,16 +2849,16 @@ def main() -> None:
             with st.container(key="content"):
                 html_block(
                     '<div class="ta-page-head">'
-                    '<h1>Security Agent</h1>'
+                    '<h1>Patch Agent</h1>'
                     '<p>'
-                    'Security Agent requires the live '
+                    'Patch Agent requires the live '
                     'PostgreSQL and Ivanti configuration.'
                     '</p>'
                     '</div>'
                 )
 
                 st.info(
-                    "Security Agent is unavailable in "
+                    "Patch Agent is unavailable in "
                     "TECHADMIN_UI_PREVIEW mode."
                 )
 
@@ -2866,7 +2867,7 @@ def main() -> None:
         if render_patch_agent_page is None:
             with st.container(key="content"):
                 st.error(
-                    "Security Agent could not be loaded."
+                    "Patch Agent could not be loaded."
                 )
 
             return
