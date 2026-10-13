@@ -1595,6 +1595,9 @@ def handle_input(query: str) -> None:
         not PREVIEW_MODE
         and not bypass_security_redirect
         and PatchSemanticInterpreter is not None
+        and not PatchSemanticInterpreter.is_identity_request(
+            normalized_query
+        )
         and PatchSemanticInterpreter.matches(
             normalized_query
         )
@@ -1606,6 +1609,11 @@ def handle_input(query: str) -> None:
     ):
         st.session_state.security_redirect_pending_query=normalized_query
         st.rerun()
+
+    # A redirect prompt can outlive the query that created it in Streamlit
+    # session state. Never leave that stale prompt above a new identity request.
+    if current_page == "assistant":
+        st.session_state.security_redirect_pending_query = None
 
     pending = st.session_state.pending_confirmation
     answer = normalized_query.casefold().rstrip(".!")
@@ -2659,8 +2667,17 @@ def contextual_chips() -> list[tuple[str, str]]:
 
 
 def page_assistant(claims: dict[str, Any]) -> None:
-    if st.session_state.get("security_redirect_pending_query"):
-        confirm_security_redirect()
+    pending_security_query = st.session_state.get("security_redirect_pending_query")
+    if pending_security_query:
+        if (
+            not PREVIEW_MODE
+            and PatchSemanticInterpreter is not None
+            and not PatchSemanticInterpreter.is_identity_request(pending_security_query)
+            and PatchSemanticInterpreter.matches(pending_security_query)
+        ):
+            confirm_security_redirect()
+        else:
+            st.session_state.security_redirect_pending_query = None
     conversation = st.session_state.conversation
     with st.container(key="content"):
         with st.container(key="greet_row"):
