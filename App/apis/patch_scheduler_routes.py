@@ -1,4 +1,4 @@
-"""Operational endpoints for the embedded Patch Agent scheduler."""
+"""Operational endpoints for the embedded Compliance Agent scheduler."""
 from fastapi import APIRouter
 from App.services.patch.scheduler import request_patch_scan_stop, scheduler_status, trigger_patch_scan_now
 

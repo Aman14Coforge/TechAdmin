@@ -1,4 +1,4 @@
-"""Validated workflow contracts for TechAdmin identity and patch agents."""
+"""Validated workflow contracts for TechAdmin identity and compliance agents."""
 from __future__ import annotations
 from datetime import date
 from enum import Enum

@@ -358,7 +358,7 @@ Each team member can now see:
 
 With this solid foundation:
 - Add more Graph API operations (account unlock, access provisioning)
-- Add network and patch agents
+- Add network and compliance agents
 - Integrate with Teams/Copilot
 - Add audit logging
 - Add approval workflows

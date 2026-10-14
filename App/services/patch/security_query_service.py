@@ -1,4 +1,4 @@
-"""Server-side patch-compliance queries for the Security Agent UI."""
+"""Server-side patch-compliance queries for the Compliance Agent UI."""
 from __future__ import annotations
 
 import json

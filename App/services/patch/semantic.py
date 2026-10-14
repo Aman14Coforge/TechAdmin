@@ -1,4 +1,4 @@
-"""Deterministic-first interpretation for TechAdmin Security Agent."""
+"""Deterministic-first interpretation for the TechAdmin Compliance Agent."""
 from __future__ import annotations
 
 import json
@@ -23,7 +23,7 @@ INVALID_DEVICES = {
     "ALL", "SHOW", "LIST",
 }
 
-PROMPT = """You extract metadata for an enterprise endpoint Security Agent.
+PROMPT = """You extract metadata for an enterprise endpoint Compliance Agent.
 Return JSON only with these keys: action, device_name, patch_query, start_date,
 end_date, reason, needs_confirmation, clarification_question, explanation.
 Allowed actions: device_list, patch_report, device_report, patch_search,

@@ -1,4 +1,4 @@
-"""Read Security Agent query history for the shared TechAdmin sidebar."""
+"""Read Compliance Agent query history for the shared TechAdmin sidebar."""
 from __future__ import annotations
 import threading
 import uuid
@@ -75,7 +75,7 @@ def get_security_query_history(
         {
             "request": row.query_text,
             "operation": row.action or "security_request",
-            "target": row.target or "Security Agent",
+            "target": row.target or "Compliance Agent",
             "status": row.status.casefold(),
             "requested_at": row.created_at,
             "agent": "security",

@@ -1,4 +1,4 @@
-"""Patch Agent workspace using MCP for reports and ticket operations."""
+"""Compliance Agent workspace using MCP for reports and ticket operations."""
 from __future__ import annotations
 from datetime import date
 from html import escape
@@ -45,7 +45,7 @@ def _unwrap(response:dict[str,Any])->dict[str,Any]:
     if not isinstance(result,dict):raise RuntimeError("MCP tool returned no structured result")
     return result
 
-def _working(text):st.markdown('<div class="ta-asst-head"><div class="ta-icon-tile"><span class="material-symbols-rounded">security</span></div><div><div class="who">Patch Agent</div><div class="ta-working"><i></i><i></i><i></i><span>'+escape(text)+'</span></div></div></div>',unsafe_allow_html=True)
+def _working(text):st.markdown('<div class="ta-asst-head"><div class="ta-icon-tile"><span class="material-symbols-rounded">security</span></div><div><div class="who">Compliance Agent</div><div class="ta-working"><i></i><i></i><i></i><span>'+escape(text)+'</span></div></div></div>',unsafe_allow_html=True)
 
 def _audit_start(query:str,operator:str,action:str,target:str|None=None)->str|None:
     access=st.session_state.get("app_user_access") or {}
@@ -177,7 +177,7 @@ def _raise_ticket_dialog(operator:str)->None:
         query_id=_audit_start(query,operator,"patch_ticket",name)
         st.session_state.security_conversation.append({"role":"user","content":query})
         st.session_state.security_details=None;st.session_state.security_report=None;st.session_state.security_patch_search_results=None
-        st.session_state.security_ticket_job={"devices":[name],"reason":"Patch remediation requested from Patch Agent.","operator":operator,"audit_id":query_id}
+        st.session_state.security_ticket_job={"devices":[name],"reason":"Patch remediation requested from Compliance Agent.","operator":operator,"audit_id":query_id}
         st.session_state.security_ticket_results=None
         st.rerun()
 
@@ -466,7 +466,7 @@ def _submit_security_query(query:str,operator:str)->None:
         st.session_state.security_redirect_pending=True
         return
     if action=="unsupported_security":
-        answer=metadata.get("explanation") or "That Patch Agent operation is not available yet."
+            answer=metadata.get("explanation") or "That Compliance Agent operation is not available yet."
     elif action=="patch_scan":
         answer="Starting a live Ivanti scan from chat is not enabled. Use the administrator scan control or wait for the scheduled scan."
     else:
@@ -587,7 +587,7 @@ def _render_device_list(operator:str)->None:
         if b.button("Raise tickets for selected",key=f"list_ticket_{scope}_{result['page']}"):
             query=f"Raise remediation tickets for {', '.join(selected)}"
             qid=_audit_start(query,operator,"patch_ticket",", ".join(selected[:5]))
-            st.session_state.security_ticket_job={"devices":selected,"reason":"Patch remediation requested from Patch Agent.","operator":operator,"audit_id":qid}
+            st.session_state.security_ticket_job={"devices":selected,"reason":"Patch remediation requested from Compliance Agent.","operator":operator,"audit_id":qid}
             st.session_state.security_ticket_results=None;st.rerun()
 
 
@@ -600,7 +600,7 @@ def render_patch_agent_page(claims:dict[str,Any],access:dict[str,Any])->None:
 
     with st.container(key="content"):
         head,action=st.columns([5,1.4],vertical_alignment="center")
-        head.markdown('<div class="ta-greet"><h1>Patch Agent</h1></div>',unsafe_allow_html=True)
+        head.markdown('<div class="ta-greet"><h1>Compliance Agent</h1></div>',unsafe_allow_html=True)
         if action.button("New conversation",icon=":material/add_comment:",width="stretch",key="security_new_conversation"):
             _reset();st.session_state.security_selected_by_page={};st.session_state.security_browse_devices=False;st.rerun()
 

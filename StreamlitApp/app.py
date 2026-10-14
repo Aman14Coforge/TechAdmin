@@ -1083,7 +1083,7 @@ INTENT_TITLES = {
 ROLE_TITLES = {"helpdesk": "Helpdesk operator", "admin": "Operations admin", "operations_admin": "Operations admin"}
 PAGES = [
     ("assistant", "Identity Agent", ":material/smart_toy:"),
-    ("security", "Patch Agent", ":material/security:"),
+    ("security", "Compliance Agent", ":material/security:"),
     ("history", "Your History", ":material/history:"),
 ]
 
@@ -1644,13 +1644,13 @@ def handle_input(query: str) -> None:
     st.rerun()
 
 
-@st.dialog("Open Patch Agent?")
+@st.dialog("Open Compliance Agent?")
 def confirm_security_redirect() -> None:
     query=str(st.session_state.get("security_redirect_pending_query") or "")
-    st.write("This looks like an endpoint-security request. Open Patch Agent?")
+    st.write("This looks like an endpoint-security request. Open Compliance Agent?")
     if query:st.caption(query)
     yes,no=st.columns(2)
-    if yes.button("Open Patch Agent",type="primary",width="stretch",key="identity_to_security_confirm"):
+    if yes.button("Open Compliance Agent",type="primary",width="stretch",key="identity_to_security_confirm"):
         st.session_state.page="security"
         st.session_state.security_redirect_query=query
         st.session_state.security_redirect_pending_query=None
@@ -2322,7 +2322,7 @@ def render_sidebar(
 
                         st.rerun()
 
-                # Patch Agent navigation
+                # Compliance Agent navigation
                 with st.container(
                     key=(
                         "agent_security_active"
@@ -2331,7 +2331,7 @@ def render_sidebar(
                     )
                 ):
                     if st.button(
-                        "Patch Agent",
+                        "Compliance Agent",
                         key="navbtn_security",
                         icon=":material/security:",
                         width="stretch",
@@ -2342,7 +2342,7 @@ def render_sidebar(
 
                         # Do not carry an Identity Agent
                         # execution or approval into
-                        # Patch Agent.
+                        # Compliance Agent.
                         st.session_state.pending_run = None
                         st.session_state.pending_confirmation = (
                             None
@@ -2866,16 +2866,16 @@ def main() -> None:
             with st.container(key="content"):
                 html_block(
                     '<div class="ta-page-head">'
-                    '<h1>Patch Agent</h1>'
+                    '<h1>Compliance Agent</h1>'
                     '<p>'
-                    'Patch Agent requires the live '
+                    'Compliance Agent requires the live '
                     'PostgreSQL and Ivanti configuration.'
                     '</p>'
                     '</div>'
                 )
 
                 st.info(
-                    "Patch Agent is unavailable in "
+                    "Compliance Agent is unavailable in "
                     "TECHADMIN_UI_PREVIEW mode."
                 )
 
@@ -2884,7 +2884,7 @@ def main() -> None:
         if render_patch_agent_page is None:
             with st.container(key="content"):
                 st.error(
-                    "Patch Agent could not be loaded."
+                    "Compliance Agent could not be loaded."
                 )
 
             return
