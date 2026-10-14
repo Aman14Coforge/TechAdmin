@@ -637,7 +637,7 @@ def inject_login_css() -> None:
 def inject_app_css() -> None:
     st.markdown(APP_CSS, unsafe_allow_html=True)
 
-# Patch Agent navigation styles added by integration script.
+# Compliance Agent navigation styles added by integration script.
 SECURITY_AGENT_CSS = r"""
 <style>
 /* SECURITY_AGENT_NAV */

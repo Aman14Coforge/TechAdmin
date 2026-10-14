@@ -75,7 +75,7 @@ class TechAdminWorkflow:
  def _patch(self,s):
   e=s["extraction"]
   try:return {"agent_result":self.patch_agent.execute(e.intent,e.metadata,s["request_id"],s["correlation_id"]),"stage":"execute_patch_agent"}
-  except Exception as x:return {"response":self._base(s,e,"Patch Agent execution failed.",type(x).__name__),"stage":"execute_patch_agent"}
+  except Exception as x:return {"response":self._base(s,e,"Compliance Agent execution failed.",type(x).__name__),"stage":"execute_patch_agent"}
  def _build_response(self,s):
   if isinstance(s.get("response"),dict):return {"stage":"build_agent_response"}
   e=s["extraction"];a=s["agent_result"];tr=a.tool_result.model_dump(mode="json") if a.tool_result else None

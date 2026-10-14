@@ -1083,7 +1083,7 @@ INTENT_TITLES = {
 ROLE_TITLES = {"helpdesk": "Helpdesk operator", "admin": "Operations admin", "operations_admin": "Operations admin"}
 PAGES = [
     ("assistant", "Identity Agent", ":material/smart_toy:"),
-    ("security", "Patch Agent", ":material/security:"),
+    ("security", "Compliance Agent", ":material/security:"),
     ("history", "Your History", ":material/history:"),
 ]
 
@@ -1595,6 +1595,9 @@ def handle_input(query: str) -> None:
         not PREVIEW_MODE
         and not bypass_security_redirect
         and PatchSemanticInterpreter is not None
+        and not PatchSemanticInterpreter.is_identity_request(
+            normalized_query
+        )
         and PatchSemanticInterpreter.matches(
             normalized_query
         )
@@ -1606,6 +1609,11 @@ def handle_input(query: str) -> None:
     ):
         st.session_state.security_redirect_pending_query=normalized_query
         st.rerun()
+
+    # A redirect prompt can outlive the query that created it in Streamlit
+    # session state. Never leave that stale prompt above a new identity request.
+    if current_page == "assistant":
+        st.session_state.security_redirect_pending_query = None
 
     pending = st.session_state.pending_confirmation
     answer = normalized_query.casefold().rstrip(".!")
@@ -1636,13 +1644,13 @@ def handle_input(query: str) -> None:
     st.rerun()
 
 
-@st.dialog("Open Patch Agent?")
+@st.dialog("Open Compliance Agent?")
 def confirm_security_redirect() -> None:
     query=str(st.session_state.get("security_redirect_pending_query") or "")
-    st.write("This looks like an endpoint-security request. Open Patch Agent?")
+    st.write("This looks like an endpoint-security request. Open Compliance Agent?")
     if query:st.caption(query)
     yes,no=st.columns(2)
-    if yes.button("Open Patch Agent",type="primary",width="stretch",key="identity_to_security_confirm"):
+    if yes.button("Open Compliance Agent",type="primary",width="stretch",key="identity_to_security_confirm"):
         st.session_state.page="security"
         st.session_state.security_redirect_query=query
         st.session_state.security_redirect_pending_query=None
@@ -2003,7 +2011,7 @@ def render_investigation(result: Dict[str, Any], response: Dict[str, Any], idx: 
             avatar_html=f'<div class="ta-avatar lg">{icon_alert(20)}</div>',
         ))
         if isinstance(report, dict):
-            render_investigation_report(report)
+            render_investigation_report(report, widget_key=f"turn-{idx}")
         else:
             html_block('<div class="ta-note warn">The investigation completed without a structured report payload.</div>')
         html_block(card_foot("Read-only CrowdStrike evidence", elapsed_text(response)))
@@ -2314,7 +2322,7 @@ def render_sidebar(
 
                         st.rerun()
 
-                # Patch Agent navigation
+                # Compliance Agent navigation
                 with st.container(
                     key=(
                         "agent_security_active"
@@ -2323,7 +2331,7 @@ def render_sidebar(
                     )
                 ):
                     if st.button(
-                        "Patch Agent",
+                        "Compliance Agent",
                         key="navbtn_security",
                         icon=":material/security:",
                         width="stretch",
@@ -2334,7 +2342,7 @@ def render_sidebar(
 
                         # Do not carry an Identity Agent
                         # execution or approval into
-                        # Patch Agent.
+                        # Compliance Agent.
                         st.session_state.pending_run = None
                         st.session_state.pending_confirmation = (
                             None
@@ -2660,8 +2668,17 @@ def contextual_chips() -> list[tuple[str, str]]:
 
 
 def page_assistant(claims: dict[str, Any]) -> None:
-    if st.session_state.get("security_redirect_pending_query"):
-        confirm_security_redirect()
+    pending_security_query = st.session_state.get("security_redirect_pending_query")
+    if pending_security_query:
+        if (
+            not PREVIEW_MODE
+            and PatchSemanticInterpreter is not None
+            and not PatchSemanticInterpreter.is_identity_request(pending_security_query)
+            and PatchSemanticInterpreter.matches(pending_security_query)
+        ):
+            confirm_security_redirect()
+        else:
+            st.session_state.security_redirect_pending_query = None
     conversation = st.session_state.conversation
     with st.container(key="content"):
         with st.container(key="greet_row"):
@@ -2849,16 +2866,16 @@ def main() -> None:
             with st.container(key="content"):
                 html_block(
                     '<div class="ta-page-head">'
-                    '<h1>Patch Agent</h1>'
+                    '<h1>Compliance Agent</h1>'
                     '<p>'
-                    'Patch Agent requires the live '
+                    'Compliance Agent requires the live '
                     'PostgreSQL and Ivanti configuration.'
                     '</p>'
                     '</div>'
                 )
 
                 st.info(
-                    "Patch Agent is unavailable in "
+                    "Compliance Agent is unavailable in "
                     "TECHADMIN_UI_PREVIEW mode."
                 )
 
@@ -2867,7 +2884,7 @@ def main() -> None:
         if render_patch_agent_page is None:
             with st.container(key="content"):
                 st.error(
-                    "Patch Agent could not be loaded."
+                    "Compliance Agent could not be loaded."
                 )
 
             return

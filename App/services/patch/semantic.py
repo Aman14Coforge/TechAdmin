@@ -1,4 +1,4 @@
-"""Deterministic-first interpretation for TechAdmin Security Agent."""
+"""Deterministic-first interpretation for the TechAdmin Compliance Agent."""
 from __future__ import annotations
 
 import json
@@ -23,7 +23,7 @@ INVALID_DEVICES = {
     "ALL", "SHOW", "LIST",
 }
 
-PROMPT = """You extract metadata for an enterprise endpoint Security Agent.
+PROMPT = """You extract metadata for an enterprise endpoint Compliance Agent.
 Return JSON only with these keys: action, device_name, patch_query, start_date,
 end_date, reason, needs_confirmation, clarification_question, explanation.
 Allowed actions: device_list, patch_report, device_report, patch_search,
@@ -49,6 +49,45 @@ class PatchSemanticInterpreter:
         "password", "unlock account", "user details", "add user",
         "remove user", "group access", "create user", "delete user",
     )
+    IDENTITY_REQUEST_PATTERNS = (
+        (
+            r"\b(?:reset|change|replace|generate|issue|recover|forgot|forget)\b"
+            r".{0,40}\bpasswords?\b|\bpasswords?\b.{0,40}"
+            r"\b(?:reset|change|replace|generate|issue|recover)\b"
+        ),
+        (
+            r"\b(?:unlock|unblock)\b.{0,30}\b(?:user|account)\b|"
+            r"\b(?:user|account)\b.{0,30}\b(?:unlock|unblock)\b"
+        ),
+        (
+            r"\b(?:get|show|find|retrieve|look\s+up|lookup|check|view|inspect|pull\s+up)\b"
+            r".{0,40}\b(?:user|account|employee)\b.{0,40}"
+            r"\b(?:details?|information|profile|status|record)\b|"
+            r"\b(?:get|show|find|retrieve|look\s+up|lookup|check|view|inspect|pull\s+up)\b"
+            r".{0,40}\b(?:details?|information|profile|status|record)\b.{0,40}"
+            r"\b(?:user|account|employee)\b"
+        ),
+        (
+            r"\b(?:get|show|find|retrieve|look\s+up|lookup|check|view|inspect|pull\s+up)\b"
+            r".{0,40}\b(?:details?|information|profile)\b"
+        ),
+        r"\b(?:grant|give|provide|revoke|remove|withdraw)\b.{0,40}\baccess\b",
+        r"\b(?:add|assign|put|place|include|remove|take|revoke)\b.{0,60}\b(?:user|member|group|access)\b",
+        (
+            r"\b(?:investigate|diagnose|explain|review|why|find\s+out)\b.{0,50}"
+            r"\b(?:failed\s+(?:sign[\s-]?ins?|logins?)|authentication failures?|"
+            r"(?:account\s+)?lockouts?|locked out)\b"
+        ),
+        (
+            r"\b(?:failed\s+(?:sign[\s-]?ins?|logins?)|authentication failures?|"
+            r"(?:account\s+)?lockouts?|locked out)\b.{0,50}"
+            r"\b(?:investigate|diagnose|explain|review|cause|why)\b"
+        ),
+        (
+            r"\b(?:why|what caused|cause of)\b.{0,30}"
+            r"\b(?:account\s+)?(?:lockouts?|locked(?:\s+out)?)\b"
+        ),
+    )
     REPORT_TERMS = ("report", "summary", "insight", "analysis", "analytics", "trend")
     LIST_TERMS = ("show", "list", "display", "which devices", "find devices")
     NONCOMPLIANCE_TERMS = (
@@ -58,9 +97,21 @@ class PatchSemanticInterpreter:
     )
 
     @classmethod
+    def is_identity_request(cls, text: str) -> bool:
+        """Recognize identity operations before broad endpoint-security terms."""
+        normalized = str(text or "").casefold()
+        return any(
+            re.search(pattern, normalized)
+            for pattern in cls.IDENTITY_REQUEST_PATTERNS
+        )
+
+    @classmethod
     def matches(cls, text: str) -> bool:
         value = str(text or "")
         normalized = value.casefold()
+        # Identity intent always wins over broad security words/device-like IDs.
+        if cls.is_identity_request(normalized):
+            return False
         return (
             any(term in normalized for term in cls.ROUTING_TERMS)
             or bool(PATCH_ID_RE.search(value))

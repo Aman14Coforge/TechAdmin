@@ -261,7 +261,7 @@ pytest Tests/ -v
 
 - [ ] Add Account Unlock operation
 - [ ] Add Network Agent (Guest WiFi, Connectivity)
-- [ ] Add Patch Agent (Software Install, Patch Management)
+- [ ] Add Compliance Agent (Software Install, Patch Management)
 - [ ] Implement Teams/Copilot integration
 - [ ] Add audit logging
 - [ ] Add request tracking dashboard
