@@ -596,7 +596,11 @@ def _source_statistics(report: dict[str, Any], events: list[dict[str, Any]]) -> 
     return sorted(aggregate.values(), key=lambda item: item["total_events"], reverse=True)
 
 
-def render_investigation_report(report: dict[str, Any]) -> None:
+def render_investigation_report(
+    report: dict[str, Any],
+    *,
+    widget_key: str,
+) -> None:
     """Render source-first investigation report with consistent filtered statistics."""
     events = report.get("timeline") if isinstance(report.get("timeline"), list) else []
     counts = report.get("event_counts") if isinstance(report.get("event_counts"), dict) else {}
@@ -732,4 +736,5 @@ def render_investigation_report(report: dict[str, Any]) -> None:
             data=pd.DataFrame(rows).to_csv(index=False).encode("utf-8"),
             file_name=f"authentication-investigation-{report.get('target_user', 'user')}.csv",
             mime="text/csv",
+            key=f"investigation-evidence-csv-{widget_key}",
         )

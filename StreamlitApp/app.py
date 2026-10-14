@@ -2011,7 +2011,7 @@ def render_investigation(result: Dict[str, Any], response: Dict[str, Any], idx: 
             avatar_html=f'<div class="ta-avatar lg">{icon_alert(20)}</div>',
         ))
         if isinstance(report, dict):
-            render_investigation_report(report)
+            render_investigation_report(report, widget_key=f"turn-{idx}")
         else:
             html_block('<div class="ta-note warn">The investigation completed without a structured report payload.</div>')
         html_block(card_foot("Read-only CrowdStrike evidence", elapsed_text(response)))
