@@ -417,7 +417,7 @@ ALLOWED_EMAIL_DOMAINS: Set[str] = _env_set(
 
 MSG_FULL_EMAIL_REQUIRED = (
     "Please provide the complete email address, for example "
-    "amit.bhagat@coforge.com."
+    "name@coforge.com."
 )
 
 MSG_DOMAIN_NOT_ALLOWED = (
