@@ -306,7 +306,7 @@ def _render_report(report):
     with analysis:
         ai=report.get("ai") or {}
         if not ai.get("available"):
-            st.warning("AI analysis is temporarily unavailable. This evidence-based analysis is generated from stored Ivanti data.")
+            st.warning("This evidence-based analysis is generated from Ivanti data.")
         data=ai.get("analysis") or {}
         st.markdown("### Executive summary")
         st.write(data.get("executive_summary") or "No analysis summary was returned.")
