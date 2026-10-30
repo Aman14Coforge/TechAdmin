@@ -56,7 +56,19 @@ class PatchService:
                                 progress.noncompliant_devices=processed
                                 progress.vulnerable_devices=processed
                                 progress_db.commit()
-                except Exception as exc:errors.append({'device':name,'discovery_id':did,'error':type(exc).__name__,'message':str(exc)[:500]})
+                except Exception as exc:
+                    logger.exception(
+                        "PATCH_DEVICE_SCAN_FAILED | scan_id={} | discovery_id={} | error_type={}",
+                        run_id,
+                        did,
+                        type(exc).__name__,
+                    )
+                    errors.append({
+                        "device": name,
+                        "discovery_id": did,
+                        "error": "DeviceScanFailed",
+                        "message": "Device scan failed. See server logs for details.",
+                    })
             if should_stop and should_stop():
                 raise PatchScanCancelled("Operator requested the scan to stop.")
             with SessionLocal() as db:
@@ -94,13 +106,19 @@ class PatchService:
             with SessionLocal() as db:
                 r=db.get(PatchScanRun,run_id);r.tickets_created=created;db.commit()
             return {'scan_id':str(run_id),'scan_date':day.isoformat(),'status':'PARTIAL' if errors else 'SUCCEEDED','devices_with_missing_patches':processed,'resolved_devices':resolved,'confirmed_missing_findings':findings_count,'eligible_devices':len(eligible),'tickets_created':created,'errors':errors}
-        except PatchScanCancelled as exc:
+        except PatchScanCancelled:
+            cancellation_message = "Scan was cancelled by an operator."
             with SessionLocal() as db:
-                r=db.get(PatchScanRun,run_id);r.status='CANCELLED';r.completed_at=datetime.now(timezone.utc);r.noncompliant_devices=processed;r.vulnerable_devices=processed;r.errors=[{'error':type(exc).__name__,'message':str(exc)}];db.commit()
-            return {'scan_id':str(run_id),'scan_date':day.isoformat(),'status':'CANCELLED','devices_processed':processed,'message':str(exc),'tickets_created':0}
+                r=db.get(PatchScanRun,run_id);r.status='CANCELLED';r.completed_at=datetime.now(timezone.utc);r.noncompliant_devices=processed;r.vulnerable_devices=processed;r.errors=[{'error':'ScanCancelled','message':cancellation_message}];db.commit()
+            return {'scan_id':str(run_id),'scan_date':day.isoformat(),'status':'CANCELLED','devices_processed':processed,'message':cancellation_message,'tickets_created':0}
         except Exception as exc:
+            logger.exception(
+                "PATCH_SCAN_FAILED | scan_id={} | error_type={}",
+                run_id,
+                type(exc).__name__,
+            )
             with SessionLocal() as db:
-                r=db.get(PatchScanRun,run_id);r.status='FAILED';r.completed_at=datetime.now(timezone.utc);r.errors=[{'error':type(exc).__name__,'message':str(exc)[:1000]}];db.commit()
+                r=db.get(PatchScanRun,run_id);r.status='FAILED';r.completed_at=datetime.now(timezone.utc);r.errors=[{'error':'PatchScanFailed','message':'Patch scan failed. See server logs for details.'}];db.commit()
             raise
         finally:client.close()
     def raise_ticket(self,device_name:str,reason:str|None=None,mode:str='USER',requested_by:str|None=None)->dict[str,Any]:return PatchTicketService().raise_for_device(device_name,reason=reason,mode=mode,requested_by=requested_by)

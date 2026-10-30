@@ -259,7 +259,15 @@ class IvantiPatchClient:
                     "count": body.get("@odata.count") or body.get("totalRecords"),
                 }
             except Exception as exc:
-                checks[name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                logger.exception(
+                    "IVANTI_PREFLIGHT_CHECK_FAILED | check={} | error_type={}",
+                    name,
+                    type(exc).__name__,
+                )
+                checks[name] = {
+                    "ok": False,
+                    "error": "Request failed. See server logs for details.",
+                }
 
         # Patch collection can run when Patch Management works. People/Devices
         # is reported separately because it is optional enrichment.
