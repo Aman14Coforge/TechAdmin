@@ -22,30 +22,65 @@ from App.workflow.state import (
 
 
 class UnifiedIntentMetadataExtractor:
-    """Use Llama 3.2 for semantic extraction, then enforce trusted policies."""
+    """Use the configured Ollama model for semantic extraction, then apply policy."""
 
     EMAIL_PATTERN = re.compile(
-        r"(?<![\w.+-])(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])",
+        r"(?<![\w.+-])"
+        r"(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})"
+        r"(?![\w.-])",
         re.IGNORECASE,
     )
+
+    EMPLOYEE_ID_PATTERN = re.compile(
+        r"\b(?:employee|emp)\s*"
+        r"(?:id|number|no|code)\s*"
+        r"(?:is\s*)?[:=#-]?\s*"
+        r"(?P<employee_id>[A-Z0-9][A-Z0-9._-]{1,31})\b",
+        re.IGNORECASE,
+    )
+
     BACKEND_SCRIPT_PATTERN = re.compile(
-        r"\b(?:via|using|through|with)\s+(?:a\s+|the\s+)?(?:powershell|script|scripts|ad script)\b|\bpowershell\b",
+        r"\b(?:via|using|through|with)\s+"
+        r"(?:a\s+|the\s+)?"
+        r"(?:powershell|script|scripts|ad script)\b"
+        r"|\bpowershell\b",
         re.IGNORECASE,
     )
+
     BACKEND_API_PATTERN = re.compile(
-        r"\b(?:via|using|through|with)\s+(?:an?\s+|the\s+)?(?:api|microsoft graph|graph api)\b|\bmicrosoft\s+graph\b",
+        r"\b(?:via|using|through|with)\s+"
+        r"(?:an?\s+|the\s+)?"
+        r"(?:api|microsoft graph|graph api)\b"
+        r"|\bmicrosoft\s+graph\b",
         re.IGNORECASE,
     )
 
     STRING_FIELDS = (
-        "username", "user_id", "email", "employee_number",
-        "username_source", "group_name", "time_window", "first_name",
-        "last_name", "department", "target_ou", "description",
-        "target_host", "vm_name", "vswitch_name", "ip_address",
-        "subnet", "gateway", "dns", "hostname", "domain", "domain_user",
+        "username",
+        "user_id",
+        "email",
+        "employee_number",
+        "username_source",
+        "group_name",
+        "time_window",
+        "first_name",
+        "last_name",
+        "department",
+        "target_ou",
+        "description",
+        "target_host",
+        "vm_name",
+        "vswitch_name",
+        "ip_address",
+        "subnet",
+        "gateway",
+        "dns",
+        "hostname",
+        "domain",
+        "domain_user",
     )
 
-    # Defaults are application policy, not LLM guesses.
+    # Existing backend defaults are preserved.
     DEFAULT_BACKEND_BY_INTENT = {
         IntentType.GET_USER_DETAILS: ExecutionBackend.SCRIPT,
         IntentType.PASSWORD_RESET: ExecutionBackend.API,
@@ -56,12 +91,18 @@ class UnifiedIntentMetadataExtractor:
         model_name: str | None = None,
         ollama_host: str | None = None,
     ) -> None:
-        self.model_name = model_name or os.getenv("MODEL_NAME", "llama3.2:latest")
-        self.ollama_host = ollama_host or os.getenv(
-            "OLLAMA_HOST", "http://localhost:11434"
+        self.model_name = model_name or os.getenv(
+            "MODEL_NAME",
+            "llama3.2:latest",
         )
+        self.ollama_host = ollama_host or os.getenv(
+            "OLLAMA_HOST",
+            "http://localhost:11434",
+        )
+
         self.llm: ChatOllama | None = None
         self.initialization_error: str | None = None
+
         try:
             self.llm = ChatOllama(
                 model=self.model_name,
@@ -82,19 +123,35 @@ class UnifiedIntentMetadataExtractor:
                 self.initialization_error,
             )
 
-    def extract_all(self, user_input: str) -> UnifiedExtractionResult:
-        normalized = user_input.strip() if isinstance(user_input, str) else ""
+    def extract_all(
+        self,
+        user_input: str,
+    ) -> UnifiedExtractionResult:
+        normalized = (
+            user_input.strip()
+            if isinstance(user_input, str)
+            else ""
+        )
+
         if not normalized:
-            return self._failure("User input is empty.", "User input is empty")
+            return self._failure(
+                "User input is empty.",
+                "User input is empty",
+            )
+
         if self.llm is None:
             return self._failure(
                 "The configured Ollama model is unavailable.",
                 self.initialization_error or "LLM not initialized",
             )
 
-        prompt = UNIFIED_EXTRACTION_PROMPT.format(user_input=normalized)
+        prompt = UNIFIED_EXTRACTION_PROMPT.format(
+            user_input=normalized
+        )
+
         started = datetime.now()
         timer = time.perf_counter()
+
         logger.info(
             "OLLAMA_CALL_STARTED | model={} | started_at={} | length={}",
             self.model_name,
@@ -105,19 +162,27 @@ class UnifiedIntentMetadataExtractor:
         try:
             response = self.llm.invoke(prompt)
             elapsed = time.perf_counter() - timer
+
             text = self._response_text(response.content)
             raw = self._json_object(text)
             prepared = self._prepare(raw, normalized)
             result = UnifiedExtractionResult.model_validate(prepared)
+
             logger.info(
-                "UNIFIED_EXTRACTION_COMPLETED | intent={} | backend={} | confidence={} | seconds={:.3f}",
+                "UNIFIED_EXTRACTION_COMPLETED | "
+                "intent={} | backend={} | confidence={} | seconds={:.3f}",
                 result.intent.value,
-                result.metadata.execution_backend.value
-                if result.metadata.execution_backend else None,
+                (
+                    result.metadata.execution_backend.value
+                    if result.metadata.execution_backend
+                    else None
+                ),
                 result.confidence,
                 elapsed,
             )
+
             return result
+
         except ValidationError as exc:
             logger.exception(
                 "Unified extraction schema validation failed | count={}",
@@ -127,6 +192,7 @@ class UnifiedIntentMetadataExtractor:
                 "The model response did not match the extraction schema.",
                 "Pydantic validation failed",
             )
+
         except Exception as exc:
             logger.exception(
                 "Unified extraction failed | type={} | seconds={:.3f}",
@@ -144,41 +210,81 @@ class UnifiedIntentMetadataExtractor:
         user_input: str,
     ) -> dict[str, Any]:
         raw_metadata = raw_result.get("metadata")
+
         if not isinstance(raw_metadata, dict):
             raw_metadata = {}
 
         metadata: dict[str, Any] = {
-            field: self._optional_string(raw_metadata.get(field))
+            field: self._optional_string(
+                raw_metadata.get(field)
+            )
             for field in self.STRING_FIELDS
         }
-        metadata["cpu_count"] = self._integer(raw_metadata.get("cpu_count"))
-        metadata["ram_gb"] = self._integer(raw_metadata.get("ram_gb"))
+
+        metadata["cpu_count"] = self._integer(
+            raw_metadata.get("cpu_count")
+        )
+        metadata["ram_gb"] = self._integer(
+            raw_metadata.get("ram_gb")
+        )
 
         intent = self._intent(raw_result.get("intent"))
-        confidence = self._confidence(raw_result.get("confidence"))
-        explanation = self._optional_string(raw_result.get("explanation"))
-        if explanation is None:
-            explanation = f"The request was classified as {intent.value}."
+        confidence = self._confidence(
+            raw_result.get("confidence")
+        )
+        explanation = self._optional_string(
+            raw_result.get("explanation")
+        )
 
+        if explanation is None:
+            explanation = (
+                f"The request was classified as {intent.value}."
+            )
+
+        # Email extraction is deterministic so the LLM cannot omit or alter it.
         explicit_email = self.EMAIL_PATTERN.search(user_input)
+
         if explicit_email:
-            email = explicit_email.group("email")
+            email = explicit_email.group("email").strip()
             metadata["email"] = email
             metadata["username"] = email.split("@", 1)[0]
             metadata["username_source"] = "derived_from_email"
 
+        # Employee ID extraction is also deterministic.
+        # This supports:
+        # Employee ID 123456
+        # Employee ID: 123456
+        # Employee number ABC-123
+        # Emp code 123456
+        explicit_employee_id = self.EMPLOYEE_ID_PATTERN.search(
+            user_input
+        )
+
+        if explicit_employee_id:
+            metadata["employee_number"] = (
+                explicit_employee_id
+                .group("employee_id")
+                .strip()
+            )
+
         explicit_backend = self._explicit_backend(user_input)
-        llm_backend = self._backend(raw_metadata.get("execution_backend"))
+        llm_backend = self._backend(
+            raw_metadata.get("execution_backend")
+        )
+
         selected_backend = (
             explicit_backend
             or llm_backend
             or self.DEFAULT_BACKEND_BY_INTENT.get(intent)
         )
+
         metadata["execution_backend"] = (
-            selected_backend.value if selected_backend else None
+            selected_backend.value
+            if selected_backend
+            else None
         )
 
-        # Security-enforced values. The LLM cannot approve an operation.
+        # Approval is never accepted from the LLM.
         metadata["approval_granted"] = False
         metadata["initial_password"] = None
         metadata["domain_password"] = None
@@ -194,24 +300,43 @@ class UnifiedIntentMetadataExtractor:
         }
 
     @classmethod
-    def _explicit_backend(cls, text: str) -> ExecutionBackend | None:
-        script = cls.BACKEND_SCRIPT_PATTERN.search(text) is not None
-        api = cls.BACKEND_API_PATTERN.search(text) is not None
+    def _explicit_backend(
+        cls,
+        text: str,
+    ) -> ExecutionBackend | None:
+        script = (
+            cls.BACKEND_SCRIPT_PATTERN.search(text)
+            is not None
+        )
+        api = (
+            cls.BACKEND_API_PATTERN.search(text)
+            is not None
+        )
+
         if script and api:
-            logger.warning("Both API and script backends were explicitly requested")
+            logger.warning(
+                "Both API and script backends were explicitly requested"
+            )
             return None
+
         if script:
             return ExecutionBackend.SCRIPT
+
         if api:
             return ExecutionBackend.API
+
         return None
 
     @staticmethod
-    def _backend(value: Any) -> ExecutionBackend | None:
+    def _backend(
+        value: Any,
+    ) -> ExecutionBackend | None:
         if isinstance(value, ExecutionBackend):
             return value
+
         if not isinstance(value, str):
             return None
+
         aliases = {
             "api": ExecutionBackend.API,
             "graph": ExecutionBackend.API,
@@ -221,33 +346,53 @@ class UnifiedIntentMetadataExtractor:
             "powershell": ExecutionBackend.SCRIPT,
             "powershell script": ExecutionBackend.SCRIPT,
         }
+
         return aliases.get(value.strip().casefold())
 
     @staticmethod
     def _intent(value: Any) -> IntentType:
         if not isinstance(value, str):
             return IntentType.UNKNOWN
+
         normalized = value.strip().casefold()
+
         try:
             return IntentType(normalized)
         except ValueError:
             return IntentType.UNKNOWN
 
     @staticmethod
-    def _optional_string(value: Any) -> str | None:
+    def _optional_string(
+        value: Any,
+    ) -> str | None:
         if value is None:
             return None
+
         normalized = str(value).strip()
+
         if normalized.casefold() in {
-            "", "null", "none", "n/a", "na", "not provided", "not available"
+            "",
+            "null",
+            "none",
+            "n/a",
+            "na",
+            "not provided",
+            "not available",
         }:
             return None
+
         return normalized
 
     @staticmethod
-    def _integer(value: Any) -> int | None:
-        if value is None or (isinstance(value, str) and not value.strip()):
+    def _integer(
+        value: Any,
+    ) -> int | None:
+        if value is None:
             return None
+
+        if isinstance(value, str) and not value.strip():
+            return None
+
         try:
             return int(value)
         except (TypeError, ValueError):
@@ -256,7 +401,10 @@ class UnifiedIntentMetadataExtractor:
     @staticmethod
     def _confidence(value: Any) -> float:
         try:
-            return max(0.0, min(1.0, float(value)))
+            return max(
+                0.0,
+                min(1.0, float(value)),
+            )
         except (TypeError, ValueError):
             return 0.0
 
@@ -264,47 +412,76 @@ class UnifiedIntentMetadataExtractor:
     def _response_text(content: Any) -> str:
         if isinstance(content, str) and content.strip():
             return content.strip()
+
         if isinstance(content, list):
             parts: list[str] = []
+
             for item in content:
                 if isinstance(item, str):
                     parts.append(item)
-                elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                elif (
+                    isinstance(item, dict)
+                    and isinstance(item.get("text"), str)
+                ):
                     parts.append(item["text"])
+
             combined = "".join(parts).strip()
+
             if combined:
                 return combined
-        raise ValueError("The model returned empty or unsupported content.")
+
+        raise ValueError(
+            "The model returned empty or unsupported content."
+        )
 
     @staticmethod
-    def _json_object(response_text: str) -> dict[str, Any]:
+    def _json_object(
+        response_text: str,
+    ) -> dict[str, Any]:
         cleaned = re.sub(
             r"^```(?:json)?\s*|\s*```$",
             "",
             response_text.strip(),
             flags=re.IGNORECASE,
         )
+
         try:
             parsed = json.loads(cleaned)
+
             if isinstance(parsed, dict):
                 return parsed
+
         except json.JSONDecodeError:
             pass
 
         decoder = json.JSONDecoder()
+
         for index, character in enumerate(cleaned):
             if character != "{":
                 continue
+
             try:
-                candidate, _ = decoder.raw_decode(cleaned[index:])
+                candidate, _ = decoder.raw_decode(
+                    cleaned[index:]
+                )
             except json.JSONDecodeError:
                 continue
-            if isinstance(candidate, dict) and "intent" in candidate:
+
+            if (
+                isinstance(candidate, dict)
+                and "intent" in candidate
+            ):
                 return candidate
-        raise ValueError("No valid extraction JSON object was found.")
+
+        raise ValueError(
+            "No valid extraction JSON object was found."
+        )
 
     @staticmethod
-    def _failure(explanation: str, error: str) -> UnifiedExtractionResult:
+    def _failure(
+        explanation: str,
+        error: str,
+    ) -> UnifiedExtractionResult:
         return UnifiedExtractionResult(
             success=False,
             intent=IntentType.UNKNOWN,
@@ -329,23 +506,56 @@ class UnifiedIntentMetadataExtractor:
             return False, "Extracted metadata is invalid."
 
         if intent == IntentType.UNKNOWN.value:
-            return False, "The request could not be mapped to a supported operation."
+            return (
+                False,
+                "The request could not be mapped to a supported operation.",
+            )
+
+        if intent == IntentType.PASSWORD_RESET.value:
+            if not validated.email:
+                return (
+                    False,
+                    "A complete company email address is required "
+                    "for password reset.",
+                )
+
+            if not validated.employee_number:
+                return (
+                    False,
+                    "Employee ID is required to verify the user "
+                    "before resetting the password.",
+                )
+
+            if validated.execution_backend is None:
+                return (
+                    False,
+                    "An execution backend is required for password reset.",
+                )
+
+            return True, "Metadata is valid."
 
         single_user_intents = {
             IntentType.GET_USER_DETAILS.value,
-            IntentType.PASSWORD_RESET.value,
             IntentType.ACCOUNT_UNLOCK.value,
             IntentType.FAILED_LOGIN_INVESTIGATION.value,
             IntentType.GRANT_ACCESS.value,
             IntentType.REVOKE_ACCESS.value,
         }
-        if intent in single_user_intents and not (
-            validated.username
-            or validated.email
-            or validated.user_id
-            or validated.employee_number
+
+        if (
+            intent in single_user_intents
+            and not (
+                validated.username
+                or validated.email
+                or validated.user_id
+                or validated.employee_number
+            )
         ):
-            return False, "A username, email, user ID, or employee number is required."
+            return (
+                False,
+                "A username, email, user ID, or employee number "
+                "is required.",
+            )
 
         if intent in {
             IntentType.GRANT_ACCESS.value,
@@ -355,8 +565,7 @@ class UnifiedIntentMetadataExtractor:
 
         return True, "Metadata is valid."
 
-    def get_supported_intents(self) -> list[str]:
-        return [
+    def get_supported_intents(self) -> list[str]:return [
             intent.value
             for intent in IntentType
             if intent is not IntentType.UNKNOWN

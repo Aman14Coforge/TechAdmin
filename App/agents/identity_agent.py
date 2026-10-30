@@ -3,9 +3,8 @@ Identity Agent Module
 
 Purpose:
     Validate Identity operation readiness, derive a username from an
-    explicitly supplied email when necessary, ask for missing
-    information, select the correct MCP server and execute the correct
-    MCP tool.
+    explicitly supplied email when necessary, ask for missing information,
+    select the correct MCP server and execute the correct MCP tool.
 
 Supported operations:
     - Password reset through Microsoft Graph or PowerShell
@@ -44,11 +43,20 @@ from App.workflow.state import (
 class IdentityAgent:
     """Identity and access-management agent using deterministic MCP routing."""
 
-    EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    EMAIL_PATTERN = re.compile(
+        r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$"
+    )
+
+    EMPLOYEE_ID_PATTERN = re.compile(
+        r"^[A-Za-z0-9][A-Za-z0-9._\-]{1,31}$"
+    )
 
     REQUIRED_FIELDS: dict[IntentType, tuple[str, ...]] = {
+        # Password reset must use the complete email and employee ID.
+        # Username is derived from the email and is not separately required.
         IntentType.PASSWORD_RESET: (
-            "username",
+            "email",
+            "employee_number",
             "execution_backend",
         ),
         IntentType.ACCOUNT_UNLOCK: (
@@ -102,7 +110,9 @@ class IdentityAgent:
         IntentType.GRANT_ACCESS: ToolName.MANAGE_ACCESS,
         IntentType.REVOKE_ACCESS: ToolName.MANAGE_ACCESS,
         IntentType.GET_USER_DETAILS: ToolName.GET_USER_DETAILS,
-        IntentType.FAILED_LOGIN_INVESTIGATION: ToolName.INVESTIGATE_FAILED_LOGIN,
+        IntentType.FAILED_LOGIN_INVESTIGATION: (
+            ToolName.INVESTIGATE_FAILED_LOGIN
+        ),
         IntentType.CREATE_USER: ToolName.CREATE_USER,
         IntentType.DELETE_USER: ToolName.DELETE_USER,
         IntentType.CREATE_GROUP: ToolName.CREATE_GROUP,
@@ -116,12 +126,14 @@ class IdentityAgent:
 
     FIELD_LABELS: dict[str, str] = {
         "username": "username",
-        "email": "email address",
+        "email": "complete company email address",
         "user_id": "user ID",
-        "employee_number": "employee number",
+        "employee_number": "employee ID",
         "group_name": "group name",
         "time_window": "time window",
-        "execution_backend": "execution method, either API or script",
+        "execution_backend": (
+            "execution method, either API or script"
+        ),
         "first_name": "first name",
         "last_name": "last name",
         "department": "department",
@@ -134,7 +146,9 @@ class IdentityAgent:
         "ram_gb": "RAM in GB",
         "vswitch_name": "virtual switch name",
         "hostname": "hostname",
-        "admin_password": "virtual-machine administrator password",
+        "admin_password": (
+            "virtual-machine administrator password"
+        ),
         "approval_granted": "explicit authorization approval",
     }
 
@@ -152,12 +166,15 @@ class IdentityAgent:
         self.mcp_client = mcp_client or IdentityMCPClient()
 
         logger.info(
-            "IdentityAgent initialized in MCP mode | supported_operations={}",
+            "IdentityAgent initialized in MCP mode | "
+            "supported_operations={}",
             self.get_supported_operations(),
         )
 
     @staticmethod
-    def _normalize_intent(operation: str | IntentType) -> IntentType:
+    def _normalize_intent(
+        operation: str | IntentType,
+    ) -> IntentType:
         if isinstance(operation, IntentType):
             return operation
 
@@ -165,7 +182,9 @@ class IdentityAgent:
             return IntentType.UNKNOWN
 
         try:
-            return IntentType(operation.strip().casefold())
+            return IntentType(
+                operation.strip().casefold()
+            )
         except ValueError:
             return IntentType.UNKNOWN
 
@@ -174,20 +193,38 @@ class IdentityAgent:
         cls,
         metadata: IdentityMetadata,
     ) -> tuple[IdentityMetadata, list[str]]:
+        """
+        Derive username from an explicitly supplied, valid email.
+
+        The complete email remains present in metadata and continues to be
+        the authoritative identifier for password-reset verification.
+        """
         if metadata.username:
             return (
                 metadata.model_copy(
                     update={
-                        "username_source": metadata.username_source or "explicit",
+                        "username_source": (
+                            metadata.username_source
+                            or "explicit"
+                        ),
                     }
                 ),
                 [],
             )
 
-        if not metadata.email or not cls.EMAIL_PATTERN.fullmatch(metadata.email):
+        if (
+            not metadata.email
+            or not cls.EMAIL_PATTERN.fullmatch(
+                metadata.email
+            )
+        ):
             return metadata, []
 
-        username = metadata.email.split("@", maxsplit=1)[0].strip()
+        username = metadata.email.split(
+            "@",
+            maxsplit=1,
+        )[0].strip()
+
         if not username:
             return metadata, []
 
@@ -199,7 +236,8 @@ class IdentityAgent:
         )
 
         logger.info(
-            "IDENTITY_METADATA_DERIVED | field=username | source=email | username={}",
+            "IDENTITY_METADATA_DERIVED | "
+            "field=username | source=email | username={}",
             username,
         )
 
@@ -213,9 +251,19 @@ class IdentityAgent:
         metadata: IdentityMetadata,
         derived_fields: list[str],
     ) -> MetadataValidationResult:
-        """Validate required fields and operation-specific approvals."""
+        """
+        Validate required metadata and operation-specific approvals.
 
+        Password reset specifically requires:
+            - Complete email
+            - Employee ID
+            - Execution backend
+
+        The Reset Password backend default remains API and is supplied by the
+        unified extractor. Get User Details continues to default to script.
+        """
         required_fields = cls.REQUIRED_FIELDS.get(intent)
+
         if required_fields is None:
             return MetadataValidationResult(
                 is_valid=False,
@@ -230,29 +278,65 @@ class IdentityAgent:
         missing_fields: list[str] = []
 
         for field_name in required_fields:
-            field_value = getattr(metadata, field_name, None)
+            field_value = getattr(
+                metadata,
+                field_name,
+                None,
+            )
 
             if field_value is None:
                 missing_fields.append(field_name)
                 continue
 
-            if isinstance(field_value, str) and not field_value.strip():
+            if (
+                isinstance(field_value, str)
+                and not field_value.strip()
+            ):
                 missing_fields.append(field_name)
+
+        if intent is IntentType.PASSWORD_RESET:
+            if (
+                metadata.email
+                and not cls.EMAIL_PATTERN.fullmatch(
+                    metadata.email.strip()
+                )
+                and "email" not in missing_fields
+            ):
+                missing_fields.append("email")
+
+            if (
+                metadata.employee_number
+                and not cls.EMPLOYEE_ID_PATTERN.fullmatch(
+                    str(metadata.employee_number).strip()
+                )
+                and "employee_number" not in missing_fields
+            ):
+                missing_fields.append(
+                    "employee_number"
+                )
 
         if (
             intent in cls.APPROVAL_REQUIRED_INTENTS
             and not metadata.approval_granted
             and "approval_granted" not in missing_fields
         ):
-            missing_fields.append("approval_granted")
+            missing_fields.append(
+                "approval_granted"
+            )
 
+        # Preserve the existing PowerShell password-reset approval check.
+        # API reset confirmation remains controlled by the central guardrail
+        # policy and trusted workflow approval bridge.
         if (
             intent is IntentType.PASSWORD_RESET
-            and metadata.execution_backend == ExecutionBackend.SCRIPT
+            and metadata.execution_backend
+            == ExecutionBackend.SCRIPT
             and not metadata.approval_granted
             and "approval_granted" not in missing_fields
         ):
-            missing_fields.append("approval_granted")
+            missing_fields.append(
+                "approval_granted"
+            )
 
         if intent is IntentType.CREATE_VM:
             if (
@@ -268,6 +352,11 @@ class IdentityAgent:
                 and "ram_gb" not in missing_fields
             ):
                 missing_fields.append("ram_gb")
+
+        # Keep ordering deterministic and prevent duplicate fields.
+        missing_fields = list(
+            dict.fromkeys(missing_fields)
+        )
 
         if missing_fields:
             return MetadataValidationResult(
@@ -288,18 +377,57 @@ class IdentityAgent:
         )
 
     @classmethod
-    def _build_clarification_question(cls, missing_fields: list[str]) -> str:
-        labels = [cls.FIELD_LABELS.get(name, name) for name in missing_fields]
+    def _build_clarification_question(
+        cls,
+        missing_fields: list[str],
+    ) -> str:
+        """
+        Build an operator-friendly clarification prompt.
+
+        Password-reset fields receive specific wording because both values
+        are required for directory verification.
+        """
+        missing = set(missing_fields)
+
+        if {
+            "email",
+            "employee_number",
+        }.issubset(missing):
+            return (
+                "Please provide the complete company email address and "
+                "employee ID for the password reset."
+            )
+
+        if missing == {"email"}:
+            return (
+                "Please provide the user's complete company email address "
+                "for the password reset."
+            )
+
+        if missing == {"employee_number"}:
+            return (
+                "Please provide the employee ID so TechAdmin can verify "
+                "the user before resetting the password."
+            )
+
+        labels = [
+            cls.FIELD_LABELS.get(name, name)
+            for name in missing_fields
+        ]
 
         if not labels:
-            return "Please provide the required operation information."
+            return (
+                "Please provide the required operation information."
+            )
 
         if len(labels) == 1:
             if missing_fields[0] == "approval_granted":
                 return (
-                    "This operation requires explicit authorization approval. "
-                    "Please approve the operation before continuing."
+                    "This operation requires explicit authorization "
+                    "approval. Please approve the operation before "
+                    "continuing."
                 )
+
             return f"Please provide the {labels[0]}."
 
         if len(labels) == 2:
@@ -308,8 +436,15 @@ class IdentityAgent:
                 f"{labels[0]} and {labels[1]}."
             )
 
-        joined_labels = ", ".join(labels[:-1]) + f", and {labels[-1]}"
-        return f"Please provide the following missing information: {joined_labels}."
+        joined_labels = (
+            ", ".join(labels[:-1])
+            + f", and {labels[-1]}"
+        )
+
+        return (
+            "Please provide the following missing information: "
+            f"{joined_labels}."
+        )
 
     @staticmethod
     def _build_mcp_arguments(
@@ -319,10 +454,42 @@ class IdentityAgent:
         request_id: str,
         correlation_id: str,
     ) -> dict[str, Any]:
+        """
+        Build arguments for the selected MCP tool.
+
+        The password-reset branch is explicit so employee_number cannot be
+        silently lost at the MCP boundary.
+        """
         arguments: dict[str, Any] = {
             "request_id": request_id,
             "correlation_id": correlation_id,
         }
+
+        if intent is IntentType.PASSWORD_RESET:
+            arguments.update(
+                {
+                    "username": metadata.username,
+                    "email": metadata.email,
+                    "user_id": metadata.user_id,
+                    "employee_number": (
+                        metadata.employee_number
+                    ),
+                    "execution_backend": (
+                        metadata.execution_backend.value
+                        if metadata.execution_backend
+                        else None
+                    ),
+                    "approval_granted": (
+                        metadata.approval_granted
+                    ),
+                }
+            )
+
+            return {
+                key: value
+                for key, value in arguments.items()
+                if value is not None
+            }
 
         arguments.update(
             metadata.model_dump(
@@ -333,6 +500,7 @@ class IdentityAgent:
 
         if intent is IntentType.GRANT_ACCESS:
             arguments["action"] = "grant"
+
         elif intent is IntentType.REVOKE_ACCESS:
             arguments["action"] = "revoke"
 
@@ -343,7 +511,10 @@ class IdentityAgent:
         cls,
         metadata: IdentityMetadata,
     ) -> dict[str, Any]:
-        data = metadata.model_dump(mode="json", exclude_none=True)
+        data = metadata.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
 
         for sensitive_field in cls.SENSITIVE_FIELDS:
             if sensitive_field in data:
@@ -361,6 +532,7 @@ class IdentityAgent:
     ) -> AgentExecutionResult:
         try:
             asyncio.get_running_loop()
+
         except RuntimeError:
             return asyncio.run(
                 self.execute_async(
@@ -389,12 +561,20 @@ class IdentityAgent:
         try:
             validated_metadata = (
                 metadata
-                if isinstance(metadata, IdentityMetadata)
-                else IdentityMetadata.model_validate(metadata)
+                if isinstance(
+                    metadata,
+                    IdentityMetadata,
+                )
+                else IdentityMetadata.model_validate(
+                    metadata
+                )
             )
+
         except ValidationError as exc:
             logger.warning(
-                "IDENTITY_METADATA_INVALID | request_id={} | correlation_id={} | error_count={}",
+                "IDENTITY_METADATA_INVALID | "
+                "request_id={} | correlation_id={} | "
+                "error_count={}",
                 request_id,
                 correlation_id,
                 exc.error_count(),
@@ -404,7 +584,10 @@ class IdentityAgent:
                 is_valid=False,
                 missing_fields=[],
                 derived_fields=[],
-                message="The extracted metadata did not match the required schema.",
+                message=(
+                    "The extracted metadata did not match "
+                    "the required schema."
+                ),
             )
 
             return AgentExecutionResult(
@@ -422,12 +605,15 @@ class IdentityAgent:
             )
 
         logger.info(
-            "IDENTITY_AGENT_RECEIVED | request_id={} | correlation_id={} | "
+            "IDENTITY_AGENT_RECEIVED | "
+            "request_id={} | correlation_id={} | "
             "intent={} | metadata={}",
             request_id,
             correlation_id,
             intent.value,
-            self._safe_metadata_for_logging(validated_metadata),
+            self._safe_metadata_for_logging(
+                validated_metadata
+            ),
         )
 
         if intent is IntentType.UNKNOWN:
@@ -435,7 +621,10 @@ class IdentityAgent:
                 is_valid=False,
                 missing_fields=[],
                 derived_fields=[],
-                message="The requested operation is not supported by the Identity Agent.",
+                message=(
+                    "The requested operation is not supported "
+                    "by the Identity Agent."
+                ),
             )
 
             return AgentExecutionResult(
@@ -452,7 +641,10 @@ class IdentityAgent:
                 error="Unsupported identity operation",
             )
 
-        validated_metadata, derived_fields = self._derive_username_from_email(
+        (
+            validated_metadata,
+            derived_fields,
+        ) = self._derive_username_from_email(
             validated_metadata
         )
 
@@ -463,13 +655,17 @@ class IdentityAgent:
         )
 
         if not validation.is_valid:
-            clarification_question = self._build_clarification_question(
-                validation.missing_fields
+            clarification_question = (
+                self._build_clarification_question(
+                    validation.missing_fields
+                )
             )
 
             logger.info(
-                "IDENTITY_AGENT_NEEDS_INPUT | request_id={} | correlation_id={} | "
-                "intent={} | missing_fields={} | derived_fields={}",
+                "IDENTITY_AGENT_NEEDS_INPUT | "
+                "request_id={} | correlation_id={} | "
+                "intent={} | missing_fields={} | "
+                "derived_fields={}",
                 request_id,
                 correlation_id,
                 intent.value,
@@ -486,12 +682,17 @@ class IdentityAgent:
                 validation=validation,
                 tool_result=None,
                 clarification_required=True,
-                clarification_question=clarification_question,
+                clarification_question=(
+                    clarification_question
+                ),
                 message=clarification_question,
                 error=None,
             )
 
-        selected_tool_name = self.TOOL_NAMES.get(intent)
+        selected_tool_name = self.TOOL_NAMES.get(
+            intent
+        )
+
         if selected_tool_name is None:
             return AgentExecutionResult(
                 success=False,
@@ -503,14 +704,28 @@ class IdentityAgent:
                 tool_result=None,
                 clarification_required=False,
                 clarification_question=None,
-                message=f"No MCP tool is registered for '{intent.value}'.",
+                message=(
+                    f"No MCP tool is registered for "
+                    f"'{intent.value}'."
+                ),
                 error="MCP tool not registered",
             )
 
-        server_module = self.mcp_client.SERVER_MODULES.get(intent.value)
-        mcp_tool_name = self.mcp_client.TOOL_NAMES.get(intent.value)
+        server_module = (
+            self.mcp_client.SERVER_MODULES.get(
+                intent.value
+            )
+        )
+        mcp_tool_name = (
+            self.mcp_client.TOOL_NAMES.get(
+                intent.value
+            )
+        )
 
-        if server_module is None or mcp_tool_name is None:
+        if (
+            server_module is None
+            or mcp_tool_name is None
+        ):
             return AgentExecutionResult(
                 success=False,
                 intent=intent,
@@ -522,8 +737,8 @@ class IdentityAgent:
                 clarification_required=False,
                 clarification_question=None,
                 message=(
-                    "The selected operation does not have a complete MCP "
-                    "server registration."
+                    "The selected operation does not have a complete "
+                    "MCP server registration."
                 ),
                 error="Incomplete MCP registration",
             )
@@ -536,8 +751,10 @@ class IdentityAgent:
         )
 
         logger.info(
-            "MCP_TOOL_DISPATCH | request_id={} | correlation_id={} | intent={} | "
-            "selected_agent=identity_agent | selected_server={} | mcp_tool={} | "
+            "MCP_TOOL_DISPATCH | "
+            "request_id={} | correlation_id={} | "
+            "intent={} | selected_agent=identity_agent | "
+            "selected_server={} | mcp_tool={} | "
             "application_tool={} | argument_fields={}",
             request_id,
             correlation_id,
@@ -549,20 +766,37 @@ class IdentityAgent:
         )
 
         try:
-            mcp_result = await self.mcp_client.call_tool(
-                operation=intent.value,
-                arguments=mcp_arguments,
+            mcp_result = (
+                await self.mcp_client.call_tool(
+                    operation=intent.value,
+                    arguments=mcp_arguments,
+                )
             )
 
-            tool_result_data = mcp_result.model_dump(mode="json")
-            if not tool_result_data.get("operation_id"):
-                tool_result_data.pop("operation_id", None)
+            tool_result_data = (
+                mcp_result.model_dump(
+                    mode="json"
+                )
+            )
 
-            tool_result = ToolResult.model_validate(tool_result_data)
+            if not tool_result_data.get(
+                "operation_id"
+            ):
+                tool_result_data.pop(
+                    "operation_id",
+                    None,
+                )
+
+            tool_result = ToolResult.model_validate(
+                tool_result_data
+            )
+
         except Exception as exc:
             logger.exception(
-                "MCP_TOOL_EXECUTION_FAILED | request_id={} | correlation_id={} | "
-                "intent={} | selected_server={} | mcp_tool={} | error_type={}",
+                "MCP_TOOL_EXECUTION_FAILED | "
+                "request_id={} | correlation_id={} | "
+                "intent={} | selected_server={} | "
+                "mcp_tool={} | error_type={}",
                 request_id,
                 correlation_id,
                 intent.value,
@@ -581,14 +815,20 @@ class IdentityAgent:
                 tool_result=None,
                 clarification_required=False,
                 clarification_question=None,
-                message="The selected Identity MCP tool could not be executed.",
+                message=(
+                    "The selected Identity MCP tool "
+                    "could not be executed."
+                ),
                 error=type(exc).__name__,
             )
 
         logger.info(
-            "MCP_TOOL_COMPLETED | request_id={} | correlation_id={} | intent={} | "
-            "selected_server={} | mcp_tool={} | application_tool={} | "
-            "tool_status={} | tool_success={} | operation_id={}",
+            "MCP_TOOL_COMPLETED | "
+            "request_id={} | correlation_id={} | "
+            "intent={} | selected_server={} | "
+            "mcp_tool={} | application_tool={} | "
+            "tool_status={} | tool_success={} | "
+            "operation_id={}",
             request_id,
             correlation_id,
             intent.value,
@@ -614,6 +854,11 @@ class IdentityAgent:
             error=tool_result.error,
         )
 
-    def get_supported_operations(self) -> list[str]:
+    def get_supported_operations(
+        self,
+    ) -> list[str]:
         """Return all Identity operations registered through MCP."""
-        return sorted(intent.value for intent in self.TOOL_NAMES)
+        return sorted(
+            intent.value
+            for intent in self.TOOL_NAMES
+        )
