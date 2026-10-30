@@ -574,6 +574,7 @@ def render_sign_in_screen(*, microsoft_message: str | None = None) -> None:
     render_auth_shell(body)
 
 
+
 def render_local_login() -> None:
     enabled = PREVIEW_MODE or _env_flag("TECHADMIN_LOCAL_LOGIN_ENABLED")
     if not enabled:
