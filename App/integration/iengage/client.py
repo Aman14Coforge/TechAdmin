@@ -269,6 +269,7 @@ class IEngageClient:
             "dry_run": self.config.dry_run,
             "form": {
                 "ECSerp": mask_sensitive_value(self.config.ecserp),
+                "AuthKey": mask_sensitive_value(self.config.auth_key),
                 "serviceDetails": redact_sensitive_data(service_details),
             },
         }

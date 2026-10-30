@@ -6,6 +6,7 @@ uvicorn
 langgraph
 langchain
 langchain-core
+langchain-community
 langchain-ollama
 
 # Data Models
@@ -27,6 +28,9 @@ loguru
 
 # Testing
 pytest
+
+# Future RAG
+chromadb
 
 # Documentation
 python-multipart

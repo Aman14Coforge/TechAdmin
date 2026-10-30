@@ -1,10 +1,7 @@
 """TechAdmin FastAPI application with embedded Ivanti scheduler."""
 from contextlib import asynccontextmanager
-import uuid
-
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from loguru import logger
 
 from App.apis.routes import router as api_router
@@ -42,23 +39,6 @@ app.add_middleware(
 app.include_router(api_router)
 app.include_router(patch_router)
 app.include_router(patch_scheduler_router)
-
-
-@app.exception_handler(Exception)
-async def handle_unexpected_api_exception(request: Request, exc: Exception) -> JSONResponse:
-    reference_id = uuid.uuid4().hex[:12]
-    logger.bind(
-        reference_id=reference_id,
-        path=request.url.path,
-        error_type=type(exc).__name__,
-    ).opt(exception=exc).error("UNHANDLED_API_EXCEPTION")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "detail": "An unexpected error occurred.",
-            "reference_id": reference_id,
-        },
-    )
 
 @app.get("/", tags=["root"])
 async def root():

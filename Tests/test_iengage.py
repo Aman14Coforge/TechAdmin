@@ -89,7 +89,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"isSave": true', body)
         self.assertIn('"RequesterAssetCode": "TEST-DEVICE"', body)
         self.assertNotIn("test-secret", json.dumps(result.request_preview))
-        self.assertNotIn("AuthKey", result.request_preview["form"])
 
     async def test_success_message_without_reference_is_not_a_ticket_id(self):
         result, _ = await self.submit({"message": "Request created successfully"})

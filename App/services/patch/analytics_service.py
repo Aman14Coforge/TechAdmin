@@ -5,8 +5,6 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from typing import Any
 
-from loguru import logger
-
 from App.services.patch.ollama_analyzer import OllamaSecurityAnalyzer
 from App.services.patch.config import settings
 from App.services.patch.security_query_service import SecurityPatchQueryService
@@ -173,15 +171,7 @@ class PatchAnalyticsService:
                 else:
                     errors.append({"device_name": name, "error": f"No snapshot on or before {report_date.isoformat()}"})
             except Exception as exc:
-                logger.exception(
-                    "PATCH_ANALYTICS_DEVICE_FAILED | device={} | error_type={}",
-                    name,
-                    type(exc).__name__,
-                )
-                errors.append({
-                    "device_name": name,
-                    "error": "Unable to load device analytics. See server logs for details.",
-                })
+                errors.append({"device_name": name, "error": f"{type(exc).__name__}: {exc}"})
 
         patch_devices: dict[str, set[str]] = defaultdict(set)
         severity_counts: Counter[str] = Counter()

@@ -48,14 +48,7 @@ def _run(source:str):
                 local_day=datetime.now(ZoneInfo(settings.scheduler_timezone)).date()
                 result=PatchService().scan(scan_date=local_day,source=source,should_stop=_STOP_REQUESTED.is_set)
                 result.update({"source":source,"preflight":preflight});_LAST_RESULT=result;_LAST_ERROR=None;return result
-            except Exception as exc:
-                _LAST_ERROR = "Patch scan failed. See server logs for details."
-                logger.exception(
-                    "PATCH_SCAN_FAILED | source={} | error_type={}",
-                    source,
-                    type(exc).__name__,
-                )
-                raise
+            except Exception as exc:_LAST_ERROR=f"{type(exc).__name__}: {exc}";logger.exception("PATCH_SCAN_FAILED");raise
             finally:connection.execute(text("SELECT pg_advisory_unlock(:key)"),{"key":settings.scan_lock_key})
     finally:
         with _LOCK:_SCAN_RUNNING=False
