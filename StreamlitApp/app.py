@@ -92,11 +92,13 @@ from investigation_report_ui import (
 
 if PREVIEW_MODE:
     render_patch_agent_page = None
+    render_infrastructure_agent_page = None
     PatchSemanticInterpreter = None
 else:
     from patch_agent_page import (
         render_patch_agent_page,
     )  # noqa: E402
+    from infrastructure_agent_page import render_infrastructure_agent_page  # noqa: E402
 
     from App.services.patch.semantic import (
         PatchSemanticInterpreter,
@@ -313,6 +315,11 @@ PAGES = [
         "security",
         "Compliance Agent",
         ":material/security:",
+    ),
+    (
+        "infrastructure",
+        "Infrastructure Agent",
+        ":material/lan:",
     ),
     (
         "history",
@@ -1615,6 +1622,30 @@ def render_sidebar(
 
                         st.rerun()
 
+                # Infrastructure Agent navigation
+                with st.container(
+                    key=(
+                        "agent_infrastructure_active"
+                        if page == "infrastructure"
+                        else "agent_infrastructure"
+                    )
+                ):
+                    if st.button(
+                        "Infrastructure Agent",
+                        key="navbtn_infrastructure",
+                        icon=":material/lan:",
+                        width="stretch",
+                    ):
+                        st.session_state.page = "infrastructure"
+
+                        # Do not carry Identity or Compliance operations into
+                        # Infrastructure Agent.
+                        st.session_state.pending_run = None
+                        st.session_state.pending_confirmation = None
+                        st.session_state.security_pending = None
+
+                        st.rerun()
+
                 # Future Network Agent placeholder
                 html_block(
                     '<div class="ta-agent-soon">'
@@ -2517,8 +2548,10 @@ def main() -> None:
     if not PREVIEW_MODE:
         try:
             from App.services.patch.bootstrap import start_patch_background_services
+            from App.services.infrastructure.bootstrap import start_infrastructure_background_services
 
             start_patch_background_services()
+            start_infrastructure_background_services()
         except Exception:
             logging.getLogger(__name__).exception(
                 "Could not start the embedded patch scheduler."
@@ -2572,6 +2605,21 @@ def main() -> None:
 
     if current_page == "history":
         page_history(history)
+        return
+
+    if current_page == "infrastructure":
+        if PREVIEW_MODE or render_infrastructure_agent_page is None:
+            with st.container(key="content"):
+                st.info(
+                    "Infrastructure Agent requires live ITOM, PostgreSQL, "
+                    "SMTP, and iEngage configuration."
+                )
+            return
+
+        render_infrastructure_agent_page(
+            claims,
+            access_info(),
+        )
         return
 
     if current_page == "security":
