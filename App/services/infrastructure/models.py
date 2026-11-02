@@ -1,10 +1,8 @@
-"""Typed records used by the Infrastructure Agent."""
+"""Infrastructure Agent data contracts."""
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-
 
 @dataclass(frozen=True)
 class InfrastructureDevice:
@@ -17,12 +15,8 @@ class InfrastructureDevice:
     device_last_seen_ist: datetime | None
     device_silent_for: str | None
 
-
 @dataclass
 class InfrastructureSiteAlert:
-    # ITOM sync IDs are not assumed to fit in PostgreSQL BIGINT. The supplied
-    # environment returned a 38-digit identifier, so TechAdmin preserves it as
-    # text instead of performing arithmetic on it.
     sync_run_id: str
     location_name: str
     match_level: str | None

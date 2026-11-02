@@ -2564,6 +2564,11 @@ def main() -> None:
 
     history = request_history()
 
+    requested_page = str(st.query_params.get("page", "")).strip().casefold()
+    requested_site = str(st.query_params.get("infrastructure_site", "")).strip()
+    if requested_page == "infrastructure" or requested_site:
+        st.session_state.page = "infrastructure"
+
     valid_pages = {
         key
         for key, _, _ in PAGES
