@@ -853,6 +853,7 @@ class IdentityAgent:
             message=tool_result.message,
             error=tool_result.error,
         )
+        
 
     def get_supported_operations(
         self,
