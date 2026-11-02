@@ -101,6 +101,18 @@ else:
     from App.services.patch.semantic import (
         PatchSemanticInterpreter,
     )  # noqa: E402
+
+if PREVIEW_MODE:
+    # Infrastructure Agent runs on sample ITOM data in preview mode.
+    os.environ.setdefault("ITOM_USE_MOCK_DATA", "true")
+
+try:
+    from infra_agent_page import (
+        render_infra_agent_page,
+    )  # noqa: E402
+except Exception:
+    logging.getLogger(__name__).exception("Could not load the Infrastructure Agent page.")
+    render_infra_agent_page = None
 from ui_theme import (  # noqa: E402
     coforge_wordmark,
     icon_alert,
@@ -313,6 +325,11 @@ PAGES = [
         "security",
         "Compliance Agent",
         ":material/security:",
+    ),
+    (
+        "infra",
+        "Infrastructure Agent",
+        ":material/dns:",
     ),
     (
         "history",
@@ -1615,6 +1632,34 @@ def render_sidebar(
 
                         st.rerun()
 
+                # Infrastructure Agent navigation
+                with st.container(
+                    key=(
+                        "agent_infra_active"
+                        if page == "infra"
+                        else "agent_infra"
+                    )
+                ):
+                    if st.button(
+                        "Infrastructure Agent",
+                        key="navbtn_infra",
+                        icon=":material/dns:",
+                        width="stretch",
+                    ):
+                        st.session_state.page = "infra"
+
+                        # Do not carry a pending Identity or
+                        # Compliance approval into this agent.
+                        st.session_state.pending_run = None
+                        st.session_state.pending_confirmation = (
+                            None
+                        )
+                        st.session_state.security_pending = (
+                            None
+                        )
+
+                        st.rerun()
+
                 # Future Network Agent placeholder
                 html_block(
                     '<div class="ta-agent-soon">'
@@ -2617,6 +2662,22 @@ def main() -> None:
             ] = True
 
         render_patch_agent_page(
+            claims,
+            access_info(),
+        )
+
+        return
+
+    if current_page == "infra":
+        if render_infra_agent_page is None:
+            with st.container(key="content"):
+                st.error(
+                    "Infrastructure Agent could not be loaded."
+                )
+
+            return
+
+        render_infra_agent_page(
             claims,
             access_info(),
         )

@@ -20,8 +20,16 @@ class PatchTicketInput:
 
 
 @dataclass(frozen=True)
+class IEngageAttachment:
+    file_name: str
+    content: bytes
+    content_type: str = "text/csv"
+
+
+@dataclass(frozen=True)
 class IEngageRequest:
     service_details: dict[str, Any]
+    attachments: list[IEngageAttachment] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -34,3 +42,33 @@ class IEngageResult:
     status_code: Optional[int] = None
     response_data: dict[str, Any] = field(default_factory=dict)
     request_preview: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class InfraTicketDevice:
+    device_name: str
+    device_status: Optional[str] = None
+    source_system: Optional[str] = None
+    ci_type: Optional[str] = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class InfraTicketInput:
+    location_name: str
+    devices: list[InfraTicketDevice]
+    site_status: Optional[str] = None
+    site_score: Optional[float] = None
+    priority: Optional[str] = None
+    site_reason: Optional[str] = None
+    triggered_by: str = "TechAdmin"
+    additional_description: Optional[str] = None
+
+    @property
+    def device_name(self) -> str:
+        """Asset code sent to iEngage: the first selected device."""
+        return self.devices[0].device_name if self.devices else ""
+
+    @property
+    def ip_address(self) -> Optional[str]:
+        return None

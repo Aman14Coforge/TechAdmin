@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from html import unescape
 from typing import Any, Iterator, Optional
@@ -125,6 +126,13 @@ class IEngageClient:
     async def create_ticket(self, request: IEngageRequest) -> IEngageResult:
         self._validate_service_details(request.service_details)
         request_preview = self._build_safe_preview(request.service_details)
+        attachments = list(getattr(request, "attachments", None) or [])
+        if attachments:
+            request_preview["attachments"] = [
+                {"field": self._attachment_field(), "file_name": item.file_name,
+                 "content_type": item.content_type, "bytes": len(item.content)}
+                for item in attachments
+            ]
 
         if not self.config.enabled:
             return IEngageResult(
@@ -141,14 +149,22 @@ class IEngageClient:
                 status_code=None, response_data={}, request_preview=request_preview,
             )
 
-        multipart_files = {
-            "ECSerp": (None, self.config.ecserp),
-            "AuthKey": (None, self.config.auth_key),
-            "serviceDetails": (
-                None,
-                json.dumps(request.service_details, ensure_ascii=False, default=str),
+        multipart_files = [
+            ("ECSerp", (None, self.config.ecserp)),
+            ("AuthKey", (None, self.config.auth_key)),
+            (
+                "serviceDetails",
+                (None, json.dumps(request.service_details, ensure_ascii=False, default=str)),
             ),
-        }
+        ]
+        # iEngage stores files through a separate FileUpload call made after the
+        # ticket exists (see _upload_attachments). Only IENGAGE_ATTACHMENT_MODE=inline
+        # puts them in this request instead.
+        if self._attachment_mode() == "inline":
+            multipart_files.extend(
+                (self._attachment_field(), (item.file_name, item.content, item.content_type))
+                for item in attachments
+            )
         headers = {"Accept": "application/json, text/plain, */*"}
 
         try:
@@ -213,9 +229,14 @@ class IEngageClient:
         success_marker = self._find_success_marker(response_data)
 
         if ticket_id:
+            message = f"iEngage ticket {ticket_id} was created successfully."
+            if attachments and self._attachment_mode() == "upload":
+                upload_problem = await self._upload_attachments(ticket_id, attachments, request_preview)
+                if upload_problem:
+                    message += f" The attachment was not uploaded: {upload_problem}"
             return IEngageResult(
                 success=True, sent=True, dry_run=False, ticket_id=ticket_id,
-                message=f"iEngage ticket {ticket_id} was created successfully.",
+                message=message,
                 status_code=response.status_code,
                 response_data=safe_response,
                 request_preview=request_preview,
@@ -260,6 +281,110 @@ class IEngageClient:
             message=message, status_code=status_code,
             response_data=response_data, request_preview=request_preview,
         )
+
+    async def _upload_attachments(self, ticket_id: str, attachments: list, request_preview: dict[str, Any]) -> Optional[str]:
+        """Upload files to an existing ticket, the way the iEngage web form does.
+
+        The form posts multipart `files` (the file) and `RequestID` (the ticket
+        number without the INC prefix and leading zeros) to .../ISD/ISD/FileUpload.
+        Returns a short problem description, or None when every upload succeeded.
+        """
+        request_number = self._request_number(ticket_id)
+        upload_url = self._file_upload_url()
+        previews = request_preview.get("attachments") or []
+        if not request_number or not upload_url:
+            problem = ("could not work out the RequestID from the ticket number" if not request_number
+                       else "set IENGAGE_FILE_UPLOAD_URL in .env")
+            for preview in previews:
+                preview["upload"] = {"uploaded": False, "message": problem}
+            return problem
+
+        problems: list[str] = []
+        for index, item in enumerate(attachments):
+            form: list[tuple[str, Any]] = [
+                (self._attachment_field(), (item.file_name, item.content, item.content_type)),
+                ("RequestID", (None, request_number)),
+            ]
+            if (os.getenv("IENGAGE_FILE_UPLOAD_SEND_AUTH") or "true").strip().casefold() not in {"0", "false", "no", "off"}:
+                form += [("ECSerp", (None, self.config.ecserp)), ("AuthKey", (None, self.config.auth_key))]
+            outcome: dict[str, Any] = {"url": upload_url, "request_id": request_number}
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(self.config.timeout_seconds),
+                    verify=self.config.verify_ssl,
+                    follow_redirects=False,
+                ) as client:
+                    response = await client.post(upload_url, files=form,
+                                                 headers={"Accept": "application/json, text/plain, */*"})
+                body = response.text or ""
+                decoded = self._decode_upload_reply(body)
+                from urllib.parse import unquote
+                location = unquote(response.headers.get("location", ""))
+                outcome["status_code"] = response.status_code
+                outcome["response"] = decoded or body[:300]
+                if location:
+                    outcome["redirect"] = location
+                if 300 <= response.status_code < 400:
+                    outcome["uploaded"] = False
+                    outcome["message"] = (
+                        "iEngage's FileUpload needs a signed-in web session and does not accept the API key "
+                        f"({location})" if "login" in location.casefold()
+                        else f"iEngage redirected the upload to {location or 'another page'} (it rejected the request)"
+                    )
+                elif not 200 <= response.status_code < 300:
+                    outcome["uploaded"] = False
+                    outcome["message"] = f"FileUpload returned HTTP {response.status_code}"
+                else:
+                    error = self._find_application_error(decoded) if isinstance(decoded, dict) else None
+                    outcome["uploaded"] = not error
+                    outcome["message"] = error or "FileUpload returned HTTP 200"
+            except httpx.RequestError as exc:
+                outcome["uploaded"] = False
+                outcome["message"] = f"FileUpload request failed: {exc}"
+            logger.info("iEngage file upload | ticket=%s | file=%s | %s", ticket_id, item.file_name,
+                        json.dumps(outcome, ensure_ascii=False, default=str)[:600])
+            if index < len(previews):
+                previews[index]["upload"] = outcome
+            if not outcome["uploaded"]:
+                problems.append(outcome["message"])
+        return "; ".join(problems) or None
+
+    @staticmethod
+    def _decode_upload_reply(body: str) -> Any:
+        """FileUpload replies are padding plus base64 JSON; return the decoded JSON if found."""
+        import base64
+        decoder = json.JSONDecoder()
+        for chunk in re.findall(r"eyJ[A-Za-z0-9+/=]{8,}", body or ""):
+            chunk = chunk.replace("=", "")
+            chunk = chunk[: len(chunk) - len(chunk) % 4]
+            try:
+                text = base64.b64decode(chunk).decode("utf-8", "ignore")
+                value, _ = decoder.raw_decode(text)
+                return value
+            except Exception:
+                continue
+        return None
+
+    def _file_upload_url(self) -> str:
+        explicit = (os.getenv("IENGAGE_FILE_UPLOAD_URL") or "").strip()
+        if explicit:
+            return explicit
+        base = httpx.URL(self.config.url) if self.config.url else None
+        return f"{base.scheme}://{base.netloc.decode()}/ess2/ISD/ISD/FileUpload" if base and base.host else ""
+
+    @staticmethod
+    def _request_number(ticket_id: str) -> Optional[str]:
+        digits = re.sub(r"\D", "", str(ticket_id or ""))
+        return str(int(digits)) if digits else None
+
+    @staticmethod
+    def _attachment_mode() -> str:
+        mode = (os.getenv("IENGAGE_ATTACHMENT_MODE") or "upload").strip().casefold()
+        return mode if mode in {"upload", "inline", "off"} else "upload"
+
+    @staticmethod
+    def _attachment_field() -> str:
+        return (os.getenv("IENGAGE_ATTACHMENT_FIELD") or "files").strip() or "files"
 
     def _build_safe_preview(self, service_details: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -320,6 +445,9 @@ class IEngageClient:
                 if normalized_key in {"success", "issuccess", "succeeded"}:
                     if value is False or normalize_key(value) in FAILURE_VALUES:
                         return self._extract_message(node) or "The API returned success=false."
+                if normalized_key in {"fileerrormessage", "fileerror"}:
+                    if value not in (None, "", False, [], {}):
+                        return f"iEngage rejected the attached file: {value}"
                 if normalized_key in {"error", "errors", "errormessage", "exception", "fault"}:
                     if value not in (None, "", False, [], {}):
                         return str(value)

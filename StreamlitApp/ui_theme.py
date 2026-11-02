@@ -656,7 +656,28 @@ SECURITY_AGENT_CSS = r"""
 </style>
 """
 
+# Infrastructure Agent navigation uses the same look as Compliance Agent.
+INFRA_AGENT_CSS = r"""
+<style>
+/* Room for three agents before the list scrolls. */
+.st-key-agent_list { max-height: 118px; }
+[class*="st-key-agent_infra"] .stButton > button {
+  height:32px; min-height:32px; padding:0 10px; font-size:13px; border-radius:8px;
+}
+.st-key-agent_infra_active .stButton > button {
+  background:transparent !important; color:#fff !important;
+}
+.st-key-agent_infra_active .stButton > button [data-testid="stIconMaterial"] {
+  color:#F27A62 !important;
+}
+.st-key-agent_infra_active .stButton > button div[data-testid="stMarkdownContainer"] p::after {
+  content:""; width:6px; height:6px; border-radius:50%; background:#22A35A;
+}
+</style>
+"""
+
 _original_inject_app_css = inject_app_css
 def inject_app_css() -> None:
     _original_inject_app_css()
     st.markdown(SECURITY_AGENT_CSS, unsafe_allow_html=True)
+    st.markdown(INFRA_AGENT_CSS, unsafe_allow_html=True)
