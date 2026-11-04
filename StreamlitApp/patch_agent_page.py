@@ -11,8 +11,20 @@ import streamlit as st
 from loguru import logger
 
 from App.integration.iengage.client import IEngageClient
+from compliance_device_browser import (
+    category_from_query,
+    initialize_classified_compliance_state,
+    open_classified_compliance_view,
+    render_requested_compliance_devices,
+    reset_classified_compliance_state,
+    show_classified_devices_dialog,
+)
 from App.mcp_client.patch_mcp_client import PatchMCPClient
 from App.services.patch.analytics_service import PatchAnalyticsService
+from App.services.patch.classified_report_service import (
+    ClassifiedComplianceReportService,
+    category_from_report_query,
+)
 from App.services.patch.security_history import finish_security_query, start_security_query
 from App.services.patch.semantic import PatchSemanticInterpreter
 from App.services.patch.security_query_service import SecurityPatchQueryService
@@ -37,6 +49,7 @@ def _selected_device_names(frame: pd.DataFrame, indices: list[Any]) -> list[str]
 
 
 def _init() -> None:
+    initialize_classified_compliance_state()
     defaults = {
         "security_selected": [],
         "security_selected_by_page": {},
@@ -61,6 +74,7 @@ def _init() -> None:
 
 
 def _reset() -> None:
+    reset_classified_compliance_state()
     for key in (
         "security_details",
         "security_report",
@@ -345,6 +359,44 @@ def _run_job() -> None:
     _working("Analyzing endpoint evidence and preparing the report…")
     day = date.fromisoformat(job["date"])
     try:
+
+        if job.get("type") == "classified":
+            result = ClassifiedComplianceReportService().build(
+                report_date=day,
+                category=job["category"],
+            )
+            st.session_state.security_report = result
+            ai = result.get("ai") or {}
+            analysis = ai.get("analysis") or {}
+            summary_text = analysis.get("executive_summary")
+            st.session_state.security_conversation.append(
+                {
+                    "role": "assistant",
+                    "content": summary_text
+                    or "The classified compliance report is ready.",
+                }
+            )
+            _audit_finish(
+                job.get("audit_id"),
+                status="completed",
+                summary={
+                    "report_type": result.get("report_type"),
+                    "classification_category": result.get(
+                        "classification_category"
+                    ),
+                    "evidence_summary": result.get("evidence", {}).get(
+                        "summary", {}
+                    ),
+                    "ai_available": ai.get("available"),
+                },
+            )
+            if job.get("audit_id"):
+                st.session_state.security_report_audit_id = job["audit_id"]
+            st.session_state.security_job = None
+            st.rerun()
+            return
+
+
         client = PatchMCPClient()
         if job["type"] == "device":
             result = _unwrap(client.device_report(job["devices"][0], day))
@@ -679,6 +731,40 @@ def _submit_security_query(query: str, operator: str) -> None:
     if not text:
         return
     st.session_state.security_conversation.append({"role": "user", "content": text})
+
+
+
+    classified_report_category = category_from_report_query(text)
+    if classified_report_category:
+        explicit_report_date = re.search(
+            r"\b(20\d{2}-\d{2}-\d{2})\b",
+            text,
+        )
+        report_snapshot = (
+            date.fromisoformat(explicit_report_date.group(1))
+            if explicit_report_date
+            else _latest_snapshot()
+        )
+        query_id = _audit_start(
+            text,
+            operator,
+            "classified_report",
+            classified_report_category,
+        )
+        st.session_state.security_details = None
+        st.session_state.security_patch_search_results = None
+        st.session_state.security_device_list = None
+        st.session_state.classified_compliance_request = None
+        st.session_state.security_report = None
+        st.session_state.security_job = {
+            "type": "classified",
+            "category": classified_report_category,
+            "devices": [],
+            "date": report_snapshot.isoformat(),
+            "audit_id": query_id,
+        }
+        return
+
     metadata = PatchSemanticInterpreter().interpret(
         text,
         selected_device=(st.session_state.security_selected[0] if len(st.session_state.security_selected) == 1 else None),
@@ -702,13 +788,36 @@ def _submit_security_query(query: str, operator: str) -> None:
         st.session_state.security_job = {"type": "device", "devices": [metadata["device_name"]], "date": snapshot, "audit_id": query_id}
         return
     if action == "device_list":
-        status = metadata.get("device_status") or (
-            "resolved" if "resolved" in text.casefold()
-            else "all" if any(word in text.casefold() for word in ("all devices", "all endpoints", "all status"))
-            else "non_compliant"
+        category = category_from_query(
+            text,
+            metadata.get("device_status"),
         )
-        st.session_state.security_conversation.append({"role": "assistant", "content": f"Showing {status.replace('_', ' ')} devices from the {snapshot} snapshot."})
-        _queue_device_list(date.fromisoformat(snapshot), status, query_id)
+        open_classified_compliance_view(
+            snapshot=date.fromisoformat(snapshot),
+            category=category,
+            search=str(metadata.get("device_name") or ""),
+        )
+        label = {
+            "active": "active non-compliant",
+            "persistent_14": "persistent 14/14",
+            "stale": "stale-reporting",
+            "unknown": "last-scan-date-unavailable",
+            "resolved": "resolved",
+            "all": "all classified",
+        }.get(category, "active non-compliant")
+        st.session_state.security_conversation.append(
+            {
+                "role": "assistant",
+                "content": (
+                    f"Showing {label} devices from the {snapshot} snapshot."
+                ),
+            }
+        )
+        _audit_finish(
+            query_id,
+            status="completed",
+            summary={"snapshot": snapshot, "category": category},
+        )
         return
     if action == "patch_report":
         selected = list(st.session_state.security_selected)
@@ -1079,7 +1188,7 @@ def render_patch_agent_page(claims: dict[str, Any], access: dict[str, Any]) -> N
             st.markdown('<div class="ta-hello"><h3>Quick actions</h3></div>', unsafe_allow_html=True)
             cards = st.columns(4)
             actions = (
-                ("Show devices", ":material/devices:", _fleet_report_dialog, (operator,)),
+                ("Show devices", ":material/devices:", show_classified_devices_dialog, ()),
                 ("Search by device", ":material/search:", _device_search_dialog, (operator,)),
                 ("Search patch or KB", ":material/system_update:", _patch_search_dialog, (operator,)),
                 ("Raise a ticket", ":material/confirmation_number:", _raise_ticket_dialog, (operator,)),
@@ -1093,7 +1202,7 @@ def render_patch_agent_page(claims: dict[str, Any], access: dict[str, Any]) -> N
                 st.markdown(f'<div class="ta-user-bubble" style="margin:14px 0 14px auto;width:fit-content">{escape(turn["content"])}</div>', unsafe_allow_html=True)
             else:
                 st.markdown(f'<div class="ta-note" style="margin:10px 0">{escape(turn["content"])}</div>', unsafe_allow_html=True)
-
+        render_requested_compliance_devices()
         if st.session_state.security_patch_search_results:
             _render_patch_search_page(operator)
         if st.session_state.security_device_list:
