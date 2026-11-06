@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 from App.services.infrastructure.models import InfrastructureDevice, InfrastructureSiteAlert
-from App.services.infrastructure.processor import process_infrastructure_sites
+from App.agents.infrastructure_agent import InfrastructureAgent
 from App.services.infrastructure.prompt_builder import build_ticket_description
 from App.services.infrastructure.scheduler import scheduler_status
 from App.services.infrastructure.state_repository import InfrastructureStateRepository
@@ -135,7 +135,7 @@ def render_infrastructure_agent_page(claims: dict[str, Any], access: dict[str, A
         left.markdown('<div class="ta-greet"><h1>Infrastructure Agent</h1></div>',unsafe_allow_html=True)
         if right.button("Run poll now",icon=":material/refresh:",width="stretch"):
             with st.spinner("Checking SolarWinds site health..."):
-                process_infrastructure_sites(trigger_type="manual")
+                InfrastructureAgent.execute(trigger_type="manual")
             st.rerun()
         _countdown(status)
         sites_tab,history_tab=st.tabs(["Site health","Check history"])
