@@ -90,7 +90,7 @@ def _countdown(status: dict[str, Any]) -> None:
     if not status.get("running") or not next_run:
         st.caption("Automatic monitoring is stopped.")
         return
-    components.html(f"""<div style='font:14px Segoe UI;color:#667085'>Automatic monitoring active · Next check in <b id='count' style='color:#197a4a'></b></div>
+    st.iframe(f"""<div style='font:14px Segoe UI;color:#667085'>Automatic monitoring active · Next check in <b id='count' style='color:#197a4a'></b></div>
     <script>const t=new Date({json.dumps(next_run)}).getTime(),e=document.getElementById('count');let q=false;
     function x(){{let r=t-Date.now(),s=Math.max(0,Math.floor(r/1000));e.textContent=`${{Math.floor(s/60)}}m ${{String(s%60).padStart(2,'0')}}s`;
     if(r<=0&&!q){{q=true;e.textContent='refreshing...';setTimeout(()=>window.parent.location.reload(),12000)}}}}x();setInterval(x,1000);</script>""", height=25)
