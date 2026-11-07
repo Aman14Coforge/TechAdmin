@@ -1,4 +1,83 @@
-"""Build deterministic iEngage descriptions and SolarWinds investigation prompts."""
+# """Build short iEngage text with no device names and one CSV link."""
+# from __future__ import annotations
+
+# import os
+
+# from App.services.infrastructure.models import InfrastructureSiteAlert
+# from App.services.infrastructure.public_download import create_affected_device_csv_url
+
+
+# def _value(value: object) -> str:
+#     return "Not available" if value in (None, "") else str(value)
+
+
+# def build_solarwinds_prompt(alert: InfrastructureSiteAlert) -> str:
+#     csv_url = create_affected_device_csv_url(alert.location_name)
+#     return f"""Investigate this SolarWinds site-health incident.
+
+# Site: {alert.location_name}
+# Priority: {alert.priority}
+# ITOM-reported status: {alert.site_status}
+# ITOM-reported score: {_value(alert.site_score)}
+# ITOM-reported reason: {_value(alert.site_reason)}
+# Affected SolarWinds devices: {alert.affected_count}
+# Critical/down SolarWinds devices: {alert.critical_devices}
+# Warning SolarWinds devices: {alert.degraded}
+# Affected-device CSV: {csv_url}
+
+# Using current SolarWinds evidence, provide the shared cause or dependency, node/interface/WAN/reachability/latency/packet-loss/power evidence, failure timeline, validation checks, restoration steps, evidence to attach, and data gaps. Do not invent evidence.""".strip()
+
+
+# def build_ticket_description(alert: InfrastructureSiteAlert) -> tuple[str, str]:
+#     csv_url = create_affected_device_csv_url(alert.location_name)
+#     prompt = build_solarwinds_prompt(alert)
+#     description = f"""INFRASTRUCTURE SITE HEALTH ALERT
+
+# Site: {alert.location_name}
+# Priority: {alert.priority}
+# ITOM-reported status: {alert.site_status}
+# ITOM-reported score: {_value(alert.site_score)}
+# ITOM-reported reason: {_value(alert.site_reason)}
+# Affected SolarWinds devices: {alert.affected_count}
+# Critical/down SolarWinds devices: {alert.critical_devices}
+# Warning SolarWinds devices: {alert.degraded}
+# Latest sync completed IST: {_value(alert.sync_completed_ist)}
+
+# DOWNLOAD AFFECTED SOLARWINDS DEVICE CSV
+# {csv_url}
+
+# COPY INTO SOLARWINDS CHAT
+# -------------------------
+# {prompt}
+# -------------------------
+# Created automatically by TechAdmin Infrastructure Agent.""".strip()
+
+#     max_chars = min(
+#         4000,
+#         max(1000, int(os.getenv("IENGAGE_DESCRIPTION_MAX_CHARS", "3900"))),
+#     )
+#     if len(description) > max_chars:
+#         fixed = f"""INFRASTRUCTURE SITE HEALTH ALERT
+
+# Site: {alert.location_name}
+# Priority: {alert.priority}
+# ITOM-reported status: {alert.site_status}
+# ITOM-reported score: {_value(alert.site_score)}
+# ITOM-reported reason: {_value(alert.site_reason)}
+# Affected SolarWinds devices: {alert.affected_count}
+
+# DOWNLOAD AFFECTED SOLARWINDS DEVICE CSV
+# {csv_url}
+
+# COPY INTO SOLARWINDS CHAT
+# -------------------------
+# """
+#         suffix = "\n-------------------------\nCreated by TechAdmin Infrastructure Agent."
+#         description = fixed + prompt[: max(0, max_chars - len(fixed) - len(suffix))] + suffix
+#     return description, prompt
+
+
+"""Build concise iEngage content without affected-device download URLs."""
 from __future__ import annotations
 
 import os
@@ -7,110 +86,120 @@ from App.services.infrastructure.models import InfrastructureSiteAlert
 
 
 def _value(value: object) -> str:
-    return "Not available" if value in (None, "") else str(value)
+    if value in (None, ""):
+        return "Not available"
+
+    return str(value)
 
 
-def _device_limit() -> int:
-    try:
-        value = int(os.getenv("INFRA_TICKET_DEVICE_DETAIL_LIMIT", "50"))
-    except ValueError:
-        value = 50
-    return max(1, min(value, 200))
+def build_solarwinds_prompt(
+    alert: InfrastructureSiteAlert,
+) -> str:
+    """Build the prompt copied into SolarWinds Chat.
 
+    Device names and download URLs are intentionally excluded.
+    """
 
-def _selected_devices(alert: InfrastructureSiteAlert):
-    limit = _device_limit()
-    return alert.devices[:limit], max(0, len(alert.devices) - limit)
-
-
-def build_solarwinds_prompt(alert: InfrastructureSiteAlert) -> str:
-    selected, omitted = _selected_devices(alert)
-    device_lines = "\n".join(
-        f"- {device.device_name} | type={_value(device.ci_type)} | "
-        f"status={device.device_status} | source={device.source_system} | "
-        f"source location={_value(device.source_location)} | "
-        f"last seen IST={_value(device.device_last_seen_ist)} | "
-        f"silent for={_value(device.device_silent_for)}"
-        for device in selected
-    ) or "- No affected-device detail was returned."
-
-    if omitted:
-        device_lines += (
-            f"\n- {omitted} additional affected devices are omitted from this prompt. "
-            "Use the TechAdmin Infrastructure Agent incident detail or CSV export for the complete list."
-        )
-
-    return f"""Investigate the following site-health incident using SolarWinds evidence.
+    return f"""Investigate this SolarWinds site-health incident.
 
 Site: {alert.location_name}
 Priority: {alert.priority}
-Site status: {alert.site_status}
-Site score: {_value(alert.site_score)}
-Site reason: {_value(alert.site_reason)}
-Score calculated IST: {_value(alert.score_calculated_ist)}
-Latest sync completed IST: {_value(alert.sync_completed_ist)}
-Total affected devices: {alert.affected_count}
-Affected-device sample:
-{device_lines}
+ITOM-reported status: {alert.site_status}
+ITOM-reported score: {_value(alert.site_score)}
+ITOM-reported reason: {_value(alert.site_reason)}
+Affected SolarWinds devices: {alert.affected_count}
+Critical/down SolarWinds devices: {alert.critical_devices}
+Warning SolarWinds devices: {alert.degraded}
 
-Provide a concise operations-ready response with:
-1. Most likely reason the site is critical/warning.
-2. Device or dependency most likely driving the site status.
-3. Correlated node, interface, WAN, power, reachability, packet-loss, latency, and alert evidence to inspect.
-4. Timeline of first failure, latest state change, and current duration where available.
-5. Whether the pattern indicates a site-wide outage, WAN issue, device issue, telemetry delay, or false positive.
-6. Exact validation commands/checks for the network operations team.
-7. Immediate containment or restoration steps, ordered by priority.
-8. Evidence that should be attached to the iEngage incident.
-9. Data gaps or assumptions. Do not invent unavailable SolarWinds evidence.
+Using current SolarWinds evidence, provide:
+
+1. The most likely shared cause or dependency.
+2. Relevant node, interface, WAN, reachability, latency, packet-loss, and power evidence.
+3. The failure timeline and current outage duration where available.
+4. Whether the incident is site-wide, WAN-related, device-specific, stale telemetry, or a false positive.
+5. Exact validation checks and restoration steps.
+6. Evidence that should be attached to the iEngage ticket.
+7. Any data gaps.
+
+Do not invent evidence.
 """.strip()
 
 
-def build_ticket_description(alert: InfrastructureSiteAlert) -> tuple[str, str]:
-    prompt = build_solarwinds_prompt(alert)
-    selected, omitted = _selected_devices(alert)
-    device_lines = "\n".join(
-        f"{index}. {device.device_name} | {device.source_system} | "
-        f"{device.device_status} | {_value(device.ci_type)} | "
-        f"last seen IST: {_value(device.device_last_seen_ist)}"
-        for index, device in enumerate(selected, start=1)
-    ) or "1. No affected-device detail was returned."
+def build_ticket_description(
+    alert: InfrastructureSiteAlert,
+) -> tuple[str, str]:
+    """Build a concise iEngage description.
 
-    if omitted:
-        device_lines += (
-            f"\n... {omitted} additional affected devices are not printed here. "
-            "The complete list remains available in TechAdmin Infrastructure Agent and CSV export."
-        )
+    No device names, localhost URL, production URL, or CSV URL is included.
+    """
+
+    prompt = build_solarwinds_prompt(alert)
 
     description = f"""INFRASTRUCTURE SITE HEALTH ALERT
 
-Site details
-- Site: {alert.location_name}
-- Match level: {_value(alert.match_level)}
-- Priority: {alert.priority}
-- Site status: {alert.site_status}
-- Site score: {_value(alert.site_score)}
-- Site reason: {_value(alert.site_reason)}
-- Healthy percentage: {_value(alert.healthy_pct)}
-- Total devices: {alert.total_devices}
-- Healthy devices: {alert.healthy}
-- Critical/down devices: {alert.critical_devices}
-- Degraded devices: {alert.degraded}
-- Not assessed: {alert.not_assessed}
-- Total affected devices in this incident: {alert.affected_count}
-- Affected devices listed below: {len(selected)}
-- Latest sync completed IST: {_value(alert.sync_completed_ist)}
-- Score calculated IST: {_value(alert.score_calculated_ist)}
-- Data age: {_value(alert.data_age)}
+Site: {alert.location_name}
+Priority: {alert.priority}
+ITOM-reported status: {alert.site_status}
+ITOM-reported score: {_value(alert.site_score)}
+ITOM-reported reason: {_value(alert.site_reason)}
+Affected SolarWinds devices: {alert.affected_count}
+Critical/down SolarWinds devices: {alert.critical_devices}
+Warning SolarWinds devices: {alert.degraded}
+Latest sync completed IST: {_value(alert.sync_completed_ist)}
 
-Affected-device sample
-{device_lines}
-
-COPY THE PROMPT BELOW INTO SOLARWINDS CHAT
-------------------------------------------------------------
+COPY INTO SOLARWINDS CHAT
+-------------------------
 {prompt}
-------------------------------------------------------------
+-------------------------
 
-This incident was created automatically by TechAdmin Infrastructure Agent from the latest successful ITOM synchronization. Validate current SolarWinds evidence before applying remediation.
+Created automatically by TechAdmin Infrastructure Agent.
 """.strip()
+
+    try:
+        max_chars = int(
+            os.getenv(
+                "IENGAGE_DESCRIPTION_MAX_CHARS",
+                "3900",
+            )
+        )
+    except ValueError:
+        max_chars = 3900
+
+    max_chars = min(
+        4000,
+        max(1000, max_chars),
+    )
+
+    if len(description) > max_chars:
+        fixed_content = f"""INFRASTRUCTURE SITE HEALTH ALERT
+
+Site: {alert.location_name}
+Priority: {alert.priority}
+ITOM-reported status: {alert.site_status}
+ITOM-reported score: {_value(alert.site_score)}
+ITOM-reported reason: {_value(alert.site_reason)}
+Affected SolarWinds devices: {alert.affected_count}
+
+COPY INTO SOLARWINDS CHAT
+-------------------------
+"""
+
+        suffix = """
+-------------------------
+
+Created automatically by TechAdmin Infrastructure Agent.
+"""
+
+        available_prompt_length = (
+            max_chars
+            - len(fixed_content)
+            - len(suffix)
+        )
+
+        description = (
+            fixed_content
+            + prompt[: max(0, available_prompt_length)]
+            + suffix
+        )
+
     return description, prompt

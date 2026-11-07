@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
+import patch_scheduler_bootstrap  # noqa: F401
 
 import streamlit as st
 
@@ -2526,7 +2527,7 @@ def open_sidebar_once() -> None:
     import streamlit.components.v1 as components
 
     with st.container(key="sidebar_opener"):
-        components.html(
+        st.iframe(
             """<script>
             (() => {
               const doc = window.parent.document;
@@ -2540,7 +2541,7 @@ def open_sidebar_once() -> None:
               }, 100);
             })();
             </script>""",
-            height=0,
+            height=1,
         )
 def main() -> None:
     init_state()
@@ -2563,6 +2564,11 @@ def main() -> None:
     inject_workspace_layout_css()
 
     history = request_history()
+
+    requested_page = str(st.query_params.get("page", "")).strip().casefold()
+    requested_site = str(st.query_params.get("infrastructure_site", "")).strip()
+    if requested_page == "infrastructure" or requested_site:
+        st.session_state.page = "infrastructure"
 
     valid_pages = {
         key
